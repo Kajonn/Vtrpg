@@ -1,0 +1,5 @@
+[defaults]
+sandbox_mode = "workspace-write"   # or "danger-full-access" / "read-only"
+network_access = "enabled"         # or "restricted"
+approval_policy = "never"     # or "on-failure" / "never"
+shell = "powershell"

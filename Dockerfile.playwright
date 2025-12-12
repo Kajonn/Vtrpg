@@ -1,0 +1,18 @@
+# Playwright test runner image
+FROM mcr.microsoft.com/playwright:v1.57.0-jammy
+
+WORKDIR /work
+
+# Install project dependencies
+COPY package*.json ./
+RUN npm ci || npm install
+
+# Copy test and config files
+COPY playwright*.js ./
+COPY tests ./tests
+COPY src ./src
+COPY index.html ./
+COPY vite.config.js ./
+
+# Default command runs the Playwright suite against the backend
+ENTRYPOINT ["npx", "playwright", "test", "--config=playwright.docker.config.js", "--reporter=line"]

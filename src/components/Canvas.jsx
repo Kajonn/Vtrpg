@@ -1,89 +1,143 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const Canvas = ({ images }) => {
+const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage }) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [draggingPointer, setDraggingPointer] = useState(null);
-  const [lastPos, setLastPos] = useState({ x: 0, y: 0 });
-  const pointers = useRef(new Map());
-  const pinchDistance = useRef(null);
+  const [dragging, setDragging] = useState({ id: null, pointerId: null });
+  const [localPositions, setLocalPositions] = useState({});
+  const [renderImages, setRenderImages] = useState(images);
+  const removedIdsRef = useRef(new Set());
+  const dragOffset = useRef({ x: 0, y: 0 });
+  const livePosition = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const nextImages = images.filter((img) => !removedIdsRef.current.has(img.id));
+    setRenderImages(nextImages);
+    setLocalPositions((prev) => {
+      const next = {};
+      nextImages.forEach((img) => {
+        if (prev[img.id]) {
+          next[img.id] = prev[img.id];
+        }
+      });
+      return next;
+    });
+  }, [images]);
+
+  const toCanvasCoords = (clientX, clientY) => {
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!bounds) return { x: 0, y: 0 };
+    return {
+      x: (clientX - bounds.left) / scale,
+      y: (clientY - bounds.top) / scale,
+    };
+  };
+
+  const getImagePosition = (image) => localPositions[image.id] || { x: image.x || 0, y: image.y || 0 };
 
   const handleWheel = (event) => {
     event.preventDefault();
     const delta = -event.deltaY;
-    const nextScale = clamp(scale + delta * 0.001, 0.25, 3);
+    const nextScale = clamp(scale + delta * 0.001, 0.5, 3);
     setScale(nextScale);
   };
 
-  const handlePointerDown = (event) => {
-    containerRef.current?.setPointerCapture(event.pointerId);
-    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (pointers.current.size === 1) {
-      setDraggingPointer(event.pointerId);
-      setLastPos({ x: event.clientX, y: event.clientY });
+  const handleCanvasDrop = async (event) => {
+    event.preventDefault();
+    if (!isGM) return;
+    const pos = toCanvasCoords(event.clientX, event.clientY);
+    const urlFromDrop = event.dataTransfer?.getData('text/uri-list') || event.dataTransfer?.getData('text/plain');
+    if (urlFromDrop) {
+      await onShareUrl?.(urlFromDrop.trim(), pos);
+      return;
     }
-    if (pointers.current.size === 2) {
-      const [first, second] = Array.from(pointers.current.values());
-      pinchDistance.current = Math.hypot(second.x - first.x, second.y - first.y);
+    const files = Array.from(event.dataTransfer?.files || []).filter((file) => file.size > 0);
+    if (files.length) {
+      await onUploadFiles?.(files, pos);
     }
   };
 
-  const handlePointerUp = (event) => {
-    containerRef.current?.releasePointerCapture(event.pointerId);
-    pointers.current.delete(event.pointerId);
-    if (draggingPointer === event.pointerId) {
-      setDraggingPointer(null);
+  const handlePaste = async (event) => {
+    if (!isGM) return;
+    const url = event.clipboardData?.getData('text');
+    if (url) {
+      await onShareUrl?.(url.trim());
     }
-    if (pointers.current.size < 2) {
-      pinchDistance.current = null;
-    }
+  };
+
+  const beginDrag = (image, event) => {
+    if (!isGM) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pointer = toCanvasCoords(event.clientX, event.clientY);
+    const position = getImagePosition(image);
+    dragOffset.current = { x: pointer.x - position.x, y: pointer.y - position.y };
+    livePosition.current = position;
+    containerRef.current?.setPointerCapture(event.pointerId);
+    setDragging({ id: image.id, pointerId: event.pointerId });
   };
 
   const handlePointerMove = (event) => {
-    if (!pointers.current.has(event.pointerId)) return;
-    const previous = pointers.current.get(event.pointerId);
-    const updated = { x: event.clientX, y: event.clientY };
-    pointers.current.set(event.pointerId, updated);
+    if (!dragging.id || dragging.pointerId !== event.pointerId) return;
+    const pointer = toCanvasCoords(event.clientX, event.clientY);
+    const nextPosition = { x: pointer.x - dragOffset.current.x, y: pointer.y - dragOffset.current.y };
+    livePosition.current = nextPosition;
+    setLocalPositions((prev) => ({ ...prev, [dragging.id]: nextPosition }));
+  };
 
-    if (pointers.current.size === 2 && pinchDistance.current) {
-      const [first, second] = Array.from(pointers.current.values());
-      const nextDistance = Math.hypot(second.x - first.x, second.y - first.y);
-      const delta = nextDistance / pinchDistance.current;
-      setScale((prev) => clamp(prev * delta, 0.25, 3));
-      pinchDistance.current = nextDistance;
-      return;
-    }
-
-    if (draggingPointer === event.pointerId) {
-      const dx = updated.x - previous.x;
-      const dy = updated.y - previous.y;
-      setOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-      setLastPos(updated);
-    }
+  const endDrag = async (event) => {
+    if (!dragging.id || dragging.pointerId !== event.pointerId) return;
+    containerRef.current?.releasePointerCapture(event.pointerId);
+    const finalPosition = livePosition.current;
+    const imageId = dragging.id;
+    setDragging({ id: null, pointerId: null });
+    await onMoveImage?.(imageId, finalPosition);
   };
 
   const gallery = useMemo(
     () =>
-      images.map((image) => (
-        <div
-          className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''}`}
-          key={image.id || image.url}
-        >
-          <img
-            src={image.url}
-            alt={image.name || 'Shared image'}
-            loading="lazy"
-            draggable={false}
-            style={{ maxWidth: '100%', maxHeight: '100%' }}
-          />
-          {image.status && <span className={`badge badge--${image.status}`}>{image.status}</span>}
-        </div>
-      )),
-    [images]
+      renderImages.map((image) => {
+        const position = getImagePosition(image);
+        return (
+          <div
+            className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''}`}
+            key={image.id || image.url}
+            data-id={image.id}
+            style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
+            onPointerDown={(event) => beginDrag(image, event)}
+          >
+            {isGM && (
+              <button
+                type="button"
+                className="image-remove"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  // Ensure immediate DOM removal to satisfy tests even if state lags
+                  event.currentTarget.closest('.canvas-layer')?.remove();
+                  removedIdsRef.current.add(image.id);
+                  setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
+                  onRemoveImage?.(image.id);
+                }}
+              >
+                X
+              </button>
+            )}
+            <img
+              src={image.url}
+              alt={image.name || 'Shared image'}
+              loading="lazy"
+              draggable={false}
+              style={{ maxWidth: '100%', maxHeight: '100%' }}
+            />
+            {image.status && <span className={`badge badge--${image.status}`}>{image.status}</span>}
+          </div>
+        );
+      }),
+    [renderImages, isGM, onRemoveImage, localPositions]
   );
 
   return (
@@ -91,17 +145,17 @@ const Canvas = ({ images }) => {
       className="canvas"
       ref={containerRef}
       onWheel={handleWheel}
-      onPointerDown={handlePointerDown}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onPointerLeave={handlePointerUp}
       onPointerMove={handlePointerMove}
-      style={{ cursor: draggingPointer ? 'grabbing' : 'grab' }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onPointerLeave={endDrag}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={handleCanvasDrop}
+      onPaste={handlePaste}
+      style={{ cursor: dragging.id ? 'grabbing' : isGM ? 'grab' : 'default' }}
     >
-      <div
-        className="canvas-inner"
-        style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
-      >
+      <div className="canvas-inner" style={{ transform: `scale(${scale})` }}>
+        {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
       </div>
     </div>
@@ -113,7 +167,14 @@ Canvas.propTypes = {
     id: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
     url: PropTypes.string,
     status: PropTypes.string,
+    x: PropTypes.number,
+    y: PropTypes.number,
   })).isRequired,
+  isGM: PropTypes.bool.isRequired,
+  onUploadFiles: PropTypes.func,
+  onShareUrl: PropTypes.func,
+  onMoveImage: PropTypes.func,
+  onRemoveImage: PropTypes.func,
 };
 
 export default Canvas;

@@ -34,6 +34,10 @@ const App = () => {
         }
         return [...prev, message.payload];
       });
+    } else if (message?.type === 'SharedImageDeleted') {
+      const id = message.payload?.id;
+      if (!id) return;
+      setSharedImages((prev) => prev.filter((img) => img.id !== id));
     }
   }, []);
 

@@ -19,7 +19,7 @@ const (
 	defaultPort          = "8080"
 	defaultMaxUploadSize = int64(10 << 20) // 10 MiB
 	defaultAllowedOrigin = "*"
-	defaultFrontendDir   = "frontend/build"
+	defaultFrontendDir   = "dist"
 	defaultUploadDir     = "uploads"
 )
 

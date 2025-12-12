@@ -8,11 +8,31 @@ services:
       - PORT=8080
       - ALLOWED_ORIGINS=*
       - MAX_UPLOAD_SIZE=10485760
-      - FRONTEND_DIR=/app/frontend/build
+      - FRONTEND_DIR=/app/dist
       - UPLOAD_DIR=/data/uploads
     volumes:
       - uploads-data:/data/uploads
     restart: unless-stopped
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.57.0-jammy
+    working_dir: /work
+    volumes:
+      - ./:/work
+    environment:
+      - CI=1
+    shm_size: '2gb'
+    command: bash -lc "npm ci || npm install && npx playwright test --config=playwright.docker.config.js --reporter=line"
+
+  e2e-image:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    environment:
+      - CI=1
+    shm_size: '2gb'
+    depends_on:
+      - app
 
 volumes:
   uploads-data:

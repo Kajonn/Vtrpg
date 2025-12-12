@@ -1,367 +1,24 @@
 package server
 
 import (
-<<<<<<< ours
-	"crypto/rand"
-	"encoding/hex"
+	"bufio"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime"
-	"mime/multipart"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
-)
-
-var allowedMIMEs = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/webp": ".webp",
-}
-
-// App contains HTTP handlers and in-memory data.
-type App struct {
-	mu           sync.RWMutex
-	rooms        map[string]*Room
-	images       map[string][]SharedImage
-	tokens       map[string]User
-	uploadDir    string
-	broadcasters map[string]*RoomHub
-}
-
-// NewApp constructs an App and ensures upload directory exists.
-func NewApp(uploadDir string) (*App, error) {
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
-		return nil, err
-	}
-
-	return &App{
-		rooms:        make(map[string]*Room),
-		images:       make(map[string][]SharedImage),
-		tokens:       make(map[string]User),
-		uploadDir:    uploadDir,
-		broadcasters: make(map[string]*RoomHub),
-	}, nil
-}
-
-// Router sets up HTTP routes.
-func (a *App) Router() http.Handler {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/login", a.handleLogin)
-	mux.Handle("/rooms", a.requireAuth(RoleGM, http.HandlerFunc(a.handleCreateRoom)))
-	mux.Handle("/rooms/", a.requireAuth(RolePlayer, http.HandlerFunc(a.handleRoomResource)))
-	mux.Handle("/ws/rooms/", a.requireAuth(RolePlayer, http.HandlerFunc(a.handleWebsocket)))
-
-	fileServer := http.FileServer(http.Dir(a.uploadDir))
-	mux.Handle("/uploads/", http.StripPrefix("/uploads/", withNoDirListing(fileServer)))
-
-	return loggingMiddleware(mux)
-}
-
-func withNoDirListing(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/") {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	var req struct {
-		Name string `json:"name"`
-		Role Role   `json:"role"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	if req.Role != RoleGM && req.Role != RolePlayer {
-		writeError(w, http.StatusBadRequest, "invalid role")
-		return
-	}
-
-	token := generateToken()
-	user := User{ID: generateToken(), Name: req.Name, Role: req.Role, Token: token}
-
-	a.mu.Lock()
-	a.tokens[token] = user
-	a.mu.Unlock()
-
-	writeJSON(w, http.StatusOK, user)
-}
-
-func (a *App) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	user := userFromContext(r.Context())
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-
-	room := &Room{ID: generateToken(), Name: req.Name, CreatedBy: user.ID, CreatedAt: time.Now()}
-
-	a.mu.Lock()
-	a.rooms[room.ID] = room
-	a.mu.Unlock()
-
-	writeJSON(w, http.StatusCreated, room)
-}
-
-func (a *App) handleRoomResource(w http.ResponseWriter, r *http.Request) {
-	// Expect /rooms/{id}/...
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		writeError(w, http.StatusNotFound, "room not found")
-		return
-	}
-
-	roomID := parts[0]
-	if len(parts) == 1 {
-		writeError(w, http.StatusNotFound, "resource not found")
-		return
-	}
-
-	switch parts[1] {
-	case "images":
-		if r.Method == http.MethodPost {
-			a.handleUploadImage(w, r, roomID)
-			return
-		}
-		if r.Method == http.MethodGet {
-			a.handleListImages(w, r, roomID)
-			return
-		}
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	default:
-		writeError(w, http.StatusNotFound, "resource not found")
-	}
-}
-
-func (a *App) handleUploadImage(w http.ResponseWriter, r *http.Request, roomID string) {
-	user := userFromContext(r.Context())
-
-	room, err := a.getRoom(roomID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "room not found")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB max
-
-	contentType := r.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "multipart/form-data") {
-		if err := r.ParseMultipartForm(12 << 20); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid form")
-			return
-		}
-
-		img, err := a.handleMultipartImage(r.MultipartForm, room)
-		if err != nil {
-			var status = http.StatusBadRequest
-			if errors.Is(err, os.ErrNotExist) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
-			return
-		}
-		a.storeAndBroadcast(w, room, img)
-		return
-	}
-
-	// JSON with URL
-	var req struct {
-		URL      string   `json:"url"`
-		Position Position `json:"position"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	if req.URL == "" {
-		writeError(w, http.StatusBadRequest, "url required")
-		return
-	}
-
-	img := SharedImage{
-		ID:         generateToken(),
-		RoomID:     room.ID,
-		SourceType: "url",
-		StorageURL: req.URL,
-		CreatedBy:  user.ID,
-		CreatedAt:  time.Now(),
-		Position:   req.Position,
-	}
-	a.storeAndBroadcast(w, room, img)
-}
-
-func (a *App) handleMultipartImage(form *multipart.Form, room *Room) (SharedImage, error) {
-	var img SharedImage
-	files := form.File["file"]
-	if len(files) == 0 {
-		return img, errors.New("file required")
-	}
-
-	fileHeader := files[0]
-	if fileHeader.Size > 10<<20 {
-		return img, errors.New("file too large")
-	}
-
-	src, err := fileHeader.Open()
-	if err != nil {
-		return img, err
-	}
-	defer src.Close()
-
-	mimeType, err := detectContentType(src, fileHeader.Filename)
-	if err != nil {
-		return img, err
-	}
-
-	ext, ok := allowedMIMEs[mimeType]
-	if !ok {
-		return img, fmt.Errorf("unsupported mime type: %s", mimeType)
-	}
-
-	filename := fmt.Sprintf("%s%s", generateToken(), ext)
-	destPath := filepath.Join(a.uploadDir, filename)
-	dest, err := os.Create(destPath)
-	if err != nil {
-		return img, err
-	}
-	defer dest.Close()
-
-	if _, err := src.Seek(0, io.SeekStart); err != nil {
-		return img, err
-	}
-	if _, err := io.Copy(dest, io.LimitReader(src, 10<<20)); err != nil {
-		return img, err
-	}
-
-	storageURL := "/uploads/" + filename
-	img = SharedImage{
-		ID:          generateToken(),
-		RoomID:      room.ID,
-		SourceType:  "file",
-		StorageURL:  storageURL,
-		StoragePath: destPath,
-		CreatedBy:   room.CreatedBy,
-		CreatedAt:   time.Now(),
-	}
-	return img, nil
-}
-
-func detectContentType(r multipart.File, filename string) (string, error) {
-	var header [512]byte
-	n, err := r.Read(header[:])
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return "", err
-	}
-
-	mimeType := http.DetectContentType(header[:n])
-	if mimeType == "application/octet-stream" {
-		if ext := filepath.Ext(filename); ext != "" {
-			if t := mime.TypeByExtension(ext); t != "" {
-				mimeType = t
-			}
-		}
-	}
-	return mimeType, nil
-}
-
-func (a *App) storeAndBroadcast(w http.ResponseWriter, room *Room, img SharedImage) {
-	a.mu.Lock()
-	a.images[room.ID] = append(a.images[room.ID], img)
-	hub := a.getHub(room.ID)
-	a.mu.Unlock()
-
-	hub.Broadcast(img)
-	writeJSON(w, http.StatusCreated, img)
-}
-
-func (a *App) handleListImages(w http.ResponseWriter, r *http.Request, roomID string) {
-	if _, err := a.getRoom(roomID); err != nil {
-		writeError(w, http.StatusNotFound, "room not found")
-		return
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	images := a.images[roomID]
-	if len(images) > 50 {
-		images = images[len(images)-50:]
-	}
-	writeJSON(w, http.StatusOK, images)
-}
-
-func (a *App) getRoom(id string) (*Room, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	room, ok := a.rooms[id]
-	if !ok {
-		return nil, os.ErrNotExist
-	}
-	return room, nil
-}
-
-func generateToken() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
-// loggingMiddleware logs basic request metadata.
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
-=======
-	"crypto/sha1"
-	"encoding/base64"
-	"errors"
-	"fmt"
-	"io"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"log/slog"
+	"sync"
 )
 
 // Server wraps HTTP handlers and configuration.
@@ -371,6 +28,10 @@ type Server struct {
 	mux             *http.ServeMux
 	allowedOrigins  []string
 	allowAllOrigins bool
+	images          map[string][]imageResponse
+	mu              sync.RWMutex
+	wsRooms         map[string]map[*wsConn]struct{}
+	wsMu            sync.Mutex
 }
 
 // New constructs a Server with routes and middleware configured.
@@ -386,6 +47,8 @@ func New(cfg Config) (*Server, error) {
 		logger:         logger,
 		mux:            http.NewServeMux(),
 		allowedOrigins: cfg.AllowedOrigins,
+		images:         make(map[string][]imageResponse),
+		wsRooms:        make(map[string]map[*wsConn]struct{}),
 	}
 	for _, origin := range cfg.AllowedOrigins {
 		if origin == "*" {
@@ -409,6 +72,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
+	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
+	s.mux.HandleFunc("/rooms/", s.handleRoomImages)
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.cfg.UploadDir))))
 	s.mux.Handle("/", s.spaHandler())
 }
@@ -442,6 +107,14 @@ func (rw *responseWriter) WriteHeader(status int) {
 	rw.ResponseWriter.WriteHeader(status)
 }
 
+// Hijack allows WebSocket handlers to upgrade the connection through the wrapped writer.
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("hijack not supported")
+}
+
 func (s *Server) spaHandler() http.Handler {
 	fs := http.Dir(s.cfg.FrontendDir)
 	fileServer := http.FileServer(fs)
@@ -469,6 +142,248 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+type imageResponse struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+	X         float64   `json:"x"`
+	Y         float64   `json:"y"`
+}
+
+func (s *Server) handleRoomImages(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] != "images" {
+		http.NotFound(w, r)
+		return
+	}
+	roomID := parts[0]
+
+	if len(parts) == 2 {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, s.getImages(roomID))
+			return
+		case http.MethodPost:
+			s.handleImageCreate(w, r, roomID)
+			return
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+	}
+
+	if len(parts) == 3 {
+		imageID := parts[2]
+		switch r.Method {
+		case http.MethodDelete:
+			s.handleImageDelete(w, r, roomID, imageID)
+			return
+		case http.MethodPatch:
+			s.handleImageUpdate(w, r, roomID, imageID)
+			return
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+	}
+
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomID string) {
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "application/json") {
+		var payload struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.URL == "" {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		x, y := s.nextPosition(roomID)
+		img := imageResponse{
+			ID:        s.newID(),
+			URL:       payload.URL,
+			Status:    "done",
+			CreatedAt: time.Now(),
+			X:         x,
+			Y:         y,
+		}
+		s.storeImage(roomID, img)
+		s.broadcastSharedImage(roomID, img)
+		writeJSON(w, http.StatusOK, img)
+		return
+	}
+
+	if err := r.ParseMultipartForm(s.cfg.MaxUploadSize); err != nil {
+		http.Error(w, "failed to parse upload", http.StatusBadRequest)
+		return
+	}
+	files := r.MultipartForm.File["file"]
+	if len(files) == 0 {
+		http.Error(w, "file not found in request", http.StatusBadRequest)
+		return
+	}
+
+	var uploaded []imageResponse
+	for _, fh := range files {
+		file, err := fh.Open()
+		if err != nil {
+			http.Error(w, "unable to open file", http.StatusBadRequest)
+			return
+		}
+
+		safeName := filepath.Base(fh.Filename)
+		uniqueName := fmt.Sprintf("%s-%s", s.newID(), safeName)
+		destPath := filepath.Join(s.cfg.UploadDir, uniqueName)
+		out, err := os.Create(destPath)
+		if err != nil {
+			file.Close()
+			http.Error(w, "unable to save file", http.StatusInternalServerError)
+			return
+		}
+
+		if _, err := io.Copy(out, file); err != nil {
+			out.Close()
+			file.Close()
+			http.Error(w, "unable to write file", http.StatusInternalServerError)
+			return
+		}
+		out.Close()
+		file.Close()
+
+		url := "/uploads/" + uniqueName
+		x, y := s.nextPosition(roomID)
+		img := imageResponse{
+			ID:        s.newID(),
+			URL:       url,
+			Status:    "done",
+			CreatedAt: time.Now(),
+			X:         x,
+			Y:         y,
+		}
+		s.storeImage(roomID, img)
+		uploaded = append(uploaded, img)
+		s.broadcastSharedImage(roomID, img)
+	}
+
+	if len(uploaded) == 1 {
+		writeJSON(w, http.StatusOK, uploaded[0])
+		return
+	}
+	writeJSON(w, http.StatusOK, uploaded)
+}
+
+func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request, roomID, imageID string) {
+	img, ok := s.deleteImage(roomID, imageID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasPrefix(img.URL, "/uploads/") {
+		filename := filepath.Base(img.URL)
+		_ = os.Remove(filepath.Join(s.cfg.UploadDir, filename))
+	}
+	s.broadcastImageDeleted(roomID, imageID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomID, imageID string) {
+	var payload struct {
+		X *float64 `json:"x"`
+		Y *float64 `json:"y"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if payload.X == nil && payload.Y == nil {
+		http.Error(w, "missing fields", http.StatusBadRequest)
+		return
+	}
+	img, ok := s.updateImage(roomID, imageID, payload.X, payload.Y)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	s.broadcastSharedImage(roomID, img)
+	writeJSON(w, http.StatusOK, img)
+}
+
+func (s *Server) getImages(roomID string) []imageResponse {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	images := s.images[roomID]
+	if images == nil {
+		return []imageResponse{}
+	}
+	return append([]imageResponse{}, images...)
+}
+
+func (s *Server) storeImage(roomID string, img imageResponse) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images[roomID] = append(s.images[roomID], img)
+}
+
+func (s *Server) nextPosition(roomID string) (float64, float64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := len(s.images[roomID])
+	offset := float64((count % 5) * 40)
+	row := float64((count / 5) * 40)
+	return offset, row
+}
+
+func (s *Server) deleteImage(roomID, imageID string) (imageResponse, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	images := s.images[roomID]
+	for idx, img := range images {
+		if img.ID == imageID {
+			s.images[roomID] = append(images[:idx], images[idx+1:]...)
+			return img, true
+		}
+	}
+	return imageResponse{}, false
+}
+
+func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageResponse, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	images := s.images[roomID]
+	for idx, img := range images {
+		if img.ID == imageID {
+			if x != nil {
+				img.X = *x
+			}
+			if y != nil {
+				img.Y = *y
+			}
+			s.images[roomID][idx] = img
+			return img, true
+		}
+	}
+	return imageResponse{}, false
+}
+
+func (s *Server) newID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
+type wsConn struct {
+	conn net.Conn
+	mu   sync.Mutex
+}
+
+func (c *wsConn) write(opcode byte, payload []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return writeFrame(c.conn, opcode, payload)
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -516,6 +431,19 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Expected paths: /ws/rooms/{roomId}
+	// Extract {roomId} robustly
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	parts := strings.Split(path, "/")
+	var roomID string
+	if len(parts) >= 3 && parts[0] == "ws" && parts[1] == "rooms" && parts[2] != "" {
+		roomID = parts[2]
+	}
+	if roomID == "" {
+		http.Error(w, "missing room id", http.StatusBadRequest)
 		return
 	}
 
@@ -578,7 +506,14 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	handleWebsocketEcho(conn, s.logger)
+	client := &wsConn{conn: conn}
+	s.registerWS(roomID, client)
+	defer s.unregisterWS(roomID, client)
+
+	go s.readLoop(roomID, client)
+
+	// Keep the connection open until read loop exits
+	select {}
 }
 
 func hasHeaderToken(value, token string) bool {
@@ -600,5 +535,91 @@ func computeWebsocketAccept(key string) string {
 	const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	h := sha1.Sum([]byte(key + magic))
 	return base64.StdEncoding.EncodeToString(h[:])
->>>>>>> theirs
+}
+
+func (s *Server) registerWS(roomID string, conn *wsConn) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	if s.wsRooms[roomID] == nil {
+		s.wsRooms[roomID] = make(map[*wsConn]struct{})
+	}
+	s.wsRooms[roomID][conn] = struct{}{}
+	s.logger.Info("ws connected", slog.String("room", roomID), slog.Int("peers", len(s.wsRooms[roomID])))
+}
+
+func (s *Server) unregisterWS(roomID string, conn *wsConn) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	peers := s.wsRooms[roomID]
+	if peers == nil {
+		return
+	}
+	delete(peers, conn)
+	if len(peers) == 0 {
+		delete(s.wsRooms, roomID)
+	}
+	s.logger.Info("ws disconnected", slog.String("room", roomID), slog.Int("peers", len(peers)))
+}
+
+func (s *Server) readLoop(roomID string, client *wsConn) {
+	for {
+		opcode, _, err := readFrame(client.conn)
+		if err != nil {
+			return
+		}
+		switch opcode {
+		case 0x8: // close
+			_ = writeCloseFrame(client.conn, 1000)
+			return
+		case 0x9: // ping
+			_ = client.write(0xA, []byte{})
+		}
+	}
+}
+
+func (s *Server) broadcastSharedImage(roomID string, img imageResponse) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "SharedImage",
+		"payload": img,
+	})
+	if err != nil {
+		s.logger.Error("marshal shared image", slog.String("error", err.Error()))
+		return
+	}
+	s.broadcast(roomID, payload)
+}
+
+func (s *Server) broadcastImageDeleted(roomID, imageID string) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "SharedImageDeleted",
+		"payload": map[string]string{"id": imageID},
+	})
+	if err != nil {
+		s.logger.Error("marshal delete", slog.String("error", err.Error()))
+		return
+	}
+	s.broadcast(roomID, payload)
+}
+
+func (s *Server) broadcast(roomID string, payload []byte) {
+	s.wsMu.Lock()
+	peers := s.wsRooms[roomID]
+	// copy to avoid holding lock during writes
+	conns := make([]*wsConn, 0, len(peers))
+	for c := range peers {
+		conns = append(conns, c)
+	}
+	s.wsMu.Unlock()
+	s.logger.Info("broadcast", slog.String("room", roomID), slog.Int("peers", len(conns)))
+	for _, c := range conns {
+		if err := c.write(0x1, payload); err != nil {
+			s.logger.Error("broadcast", slog.String("error", err.Error()))
+		}
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
 }
