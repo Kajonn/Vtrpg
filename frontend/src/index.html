@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vtrpg</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      .card { max-width: 640px; padding: 1.5rem; border: 1px solid #e5e7eb; border-radius: 0.75rem; box-shadow: 0 10px 15px rgba(0,0,0,0.05);} 
+      code { background: #f3f4f6; padding: 0.15rem 0.35rem; border-radius: 0.35rem; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Vtrpg server</h1>
+      <p>Static assets are served from the built frontend along with any files in <code>/uploads</code>.</p>
+      <ul>
+        <li>Health check: <code>/healthz</code></li>
+        <li>Upload endpoint: <code>POST /upload</code></li>
+        <li>WebSocket echo: <code>/ws</code></li>
+      </ul>
+      <p class="build">Built at __BUILD_TIME__</p>
+    </div>
+  </body>
+</html>
