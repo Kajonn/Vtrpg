@@ -1,13 +1,19 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import './App.css';
 
 const useWebSocket = (roomId, onMessage) => {
+  const socketRef = useRef(null);
+
   useEffect(() => {
     if (!roomId) return undefined;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws/rooms/${roomId}`);
+    const socketFactory = window.__mockWebSocket;
+    const socket = socketFactory
+      ? socketFactory(roomId, onMessage)
+      : new WebSocket(`${protocol}://${window.location.host}/ws/rooms/${roomId}`);
+    socketRef.current = socket;
     socket.addEventListener('message', (event) => {
       try {
         const parsed = JSON.parse(event.data);
@@ -16,14 +22,31 @@ const useWebSocket = (roomId, onMessage) => {
         console.error('Failed to parse message', error);
       }
     });
-    return () => socket.close();
+    return () => {
+      socketRef.current = null;
+      socket.close();
+    };
   }, [roomId, onMessage]);
+
+  const send = useCallback((payload) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify(payload));
+    return true;
+  }, []);
+
+  return send;
 };
 
 const App = () => {
   const [user, setUser] = useState(null);
   const [roomId, setRoomId] = useState('alpha');
   const [sharedImages, setSharedImages] = useState([]);
+  const [diceCount, setDiceCount] = useState(4);
+  const [diceSeed, setDiceSeed] = useState(0);
+  const [diceRollId, setDiceRollId] = useState(0);
+
+  const clampDiceCount = useCallback((value) => Math.max(1, Math.min(12, value)), []);
 
   const handleMessage = useCallback((message) => {
     if (message?.type === 'SharedImage') {
@@ -38,10 +61,26 @@ const App = () => {
       const id = message.payload?.id;
       if (!id) return;
       setSharedImages((prev) => prev.filter((img) => img.id !== id));
+    } else if (message?.type === 'DiceRoll') {
+      const { count, seed } = message.payload || {};
+      if (typeof count === 'number' && typeof seed === 'number') {
+        setDiceCount(clampDiceCount(count));
+        setDiceSeed(seed >>> 0);
+        setDiceRollId((prev) => prev + 1);
+      }
     }
-  }, []);
+  }, [clampDiceCount]);
 
-  useWebSocket(roomId, handleMessage);
+  const sendMessage = useWebSocket(roomId, handleMessage);
+
+  const requestDiceRoll = useCallback(() => {
+    const success = sendMessage({ type: 'DiceRollRequest', payload: { count: diceCount } });
+    if (!success) {
+      const fallbackSeed = Math.floor(Math.random() * 4294967295);
+      setDiceSeed(fallbackSeed >>> 0);
+      setDiceRollId((prev) => prev + 1);
+    }
+  }, [sendMessage, diceCount]);
 
   const sortedImages = useMemo(
     () => [...sharedImages].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
@@ -56,7 +95,17 @@ const App = () => {
       {!user ? (
         <Login onLogin={(profile) => setUser(profile)} defaultRoom={roomId} onRoomChange={setRoomId} />
       ) : (
-        <Room roomId={roomId} user={user} images={sortedImages} onImagesUpdate={setSharedImages} />
+        <Room
+          roomId={roomId}
+          user={user}
+          images={sortedImages}
+          onImagesUpdate={setSharedImages}
+          diceCount={diceCount}
+          diceSeed={diceSeed}
+          diceRollId={diceRollId}
+          onDiceCountChange={(value) => setDiceCount(clampDiceCount(value))}
+          onDiceRoll={requestDiceRoll}
+        />
       )}
     </div>
   );

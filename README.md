@@ -27,6 +27,25 @@ Run the server locally:
 PORT=8080 go run ./cmd/server
 ```
 
+## End-to-end tests (Playwright)
+
+Two ways to satisfy the Playwright browser requirement without touching system packages:
+
+- **Project-local install**: download Chromium into a repo-scoped cache and run the suite locally.
+
+  ```bash
+  npm run playwright:install
+  npm run test:e2e
+  ```
+
+- **Dockerized runner**: execute the tests inside the upstream Playwright container (browsers preinstalled). This mounts the repo into the container and runs using `playwright.docker.config.js`.
+
+  ```bash
+  docker compose run --rm e2e
+  ```
+
+- **Bring your own Chromium**: if the CDN downloads are blocked, point Playwright at an existing Chrome/Chromium binary. The config will automatically pick up any browser located under `.cache/ms-playwright/*/chrome-linux/chrome`, or you can set `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome` before invoking `npm run test:e2e`. To seed the cache without internet access here, you can run `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright npx playwright install chromium` on another machine and copy the resulting `.cache/ms-playwright` directory into this repo.
+
 ## Docker
 
 Build and run with Docker:

@@ -1,9 +1,34 @@
 import { test, expect } from '@playwright/test';
 
+const installMockSocket = async (page) => {
+  await page.addInitScript(() => {
+    class MockWebSocket extends EventTarget {
+      static OPEN = 1;
+      static CLOSED = 3;
+
+      constructor() {
+        super();
+        this.readyState = MockWebSocket.OPEN;
+        window.__mockSocketInstance = this;
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = MockWebSocket.CLOSED;
+      }
+    }
+
+    window.__mockWebSocket = () => new MockWebSocket();
+    window.WebSocket = MockWebSocket;
+  });
+};
+
 const mockImage = { id: 'demo', url: 'https://placekitten.com/400/400', status: 'done', createdAt: new Date().toISOString() };
 
 test.describe('drag-drop and zoom', () => {
   test.beforeEach(async ({ page }) => {
+    await installMockSocket(page);
     await page.route('**/rooms/**', (route, request) => {
       const method = request.method();
       if (method === 'GET' && request.url().includes('/images')) {

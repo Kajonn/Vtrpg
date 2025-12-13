@@ -8,7 +8,17 @@ const fetchImages = async (roomId) => {
   return response.json();
 };
 
-const Room = ({ roomId, user, images, onImagesUpdate }) => {
+const Room = ({
+  roomId,
+  user,
+  images,
+  onImagesUpdate,
+  diceCount,
+  diceSeed,
+  diceRollId,
+  onDiceCountChange,
+  onDiceRoll,
+}) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
@@ -140,6 +150,11 @@ const Room = ({ roomId, user, images, onImagesUpdate }) => {
         onShareUrl={handleShareUrl}
         onMoveImage={handleMoveImage}
         onRemoveImage={handleRemoveImage}
+        diceCount={diceCount}
+        diceSeed={diceSeed}
+        diceRollId={diceRollId}
+        onDiceCountChange={onDiceCountChange}
+        onDiceRoll={onDiceRoll}
       />
     </section>
   );
@@ -159,6 +174,11 @@ Room.propTypes = {
     y: PropTypes.number,
   })).isRequired,
   onImagesUpdate: PropTypes.func.isRequired,
+  diceCount: PropTypes.number.isRequired,
+  diceSeed: PropTypes.number.isRequired,
+  diceRollId: PropTypes.number.isRequired,
+  onDiceCountChange: PropTypes.func.isRequired,
+  onDiceRoll: PropTypes.func.isRequired,
 };
 
 export default Room;
