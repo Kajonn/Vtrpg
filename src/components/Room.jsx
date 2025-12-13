@@ -8,7 +8,7 @@ const fetchImages = async (roomId) => {
   return response.json();
 };
 
-const Room = ({ roomId, user, images, onImagesUpdate }) => {
+const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
@@ -118,6 +118,9 @@ const Room = ({ roomId, user, images, onImagesUpdate }) => {
             Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
           </p>
         </div>
+        <button type="button" className="ghost-button" onClick={onLogout}>
+          Logga ut
+        </button>
       </header>
 
       {error && <p className="error">{error}</p>}
@@ -141,6 +144,25 @@ const Room = ({ roomId, user, images, onImagesUpdate }) => {
         onMoveImage={handleMoveImage}
         onRemoveImage={handleRemoveImage}
       />
+
+      <footer className="participant-panel">
+        <div className="participant-panel__header">
+          <h3>Aktiva användare</h3>
+          <span className="participant-count">{participants.length} online</span>
+        </div>
+        <ul className="participant-list">
+          {participants.map((participant, index) => (
+            <li
+              key={`${participant.name}-${participant.role}-${index}`}
+              className={`participant-chip participant-chip--${participant.role}`}
+            >
+              <span className="participant-name">{participant.name}</span>
+              <span className="participant-role">{participant.role === 'gm' ? 'Spelledare' : 'Spelare'}</span>
+            </li>
+          ))}
+          {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
+        </ul>
+      </footer>
     </section>
   );
 };
@@ -151,6 +173,12 @@ Room.propTypes = {
     name: PropTypes.string.isRequired,
     role: PropTypes.string.isRequired,
   }).isRequired,
+  participants: PropTypes.arrayOf(
+    PropTypes.shape({
+      name: PropTypes.string,
+      role: PropTypes.string,
+    })
+  ).isRequired,
   images: PropTypes.arrayOf(PropTypes.shape({
     id: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
     url: PropTypes.string,
@@ -159,6 +187,7 @@ Room.propTypes = {
     y: PropTypes.number,
   })).isRequired,
   onImagesUpdate: PropTypes.func.isRequired,
+  onLogout: PropTypes.func.isRequired,
 };
 
 export default Room;

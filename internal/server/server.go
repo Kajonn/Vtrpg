@@ -30,7 +30,8 @@ type Server struct {
 	allowAllOrigins bool
 	images          map[string][]imageResponse
 	mu              sync.RWMutex
-	wsRooms         map[string]map[*wsConn]struct{}
+	wsRooms         map[string]map[*wsConn]clientProfile
+	gmRooms         map[string]*wsConn
 	wsMu            sync.Mutex
 }
 
@@ -48,7 +49,8 @@ func New(cfg Config) (*Server, error) {
 		mux:            http.NewServeMux(),
 		allowedOrigins: cfg.AllowedOrigins,
 		images:         make(map[string][]imageResponse),
-		wsRooms:        make(map[string]map[*wsConn]struct{}),
+		wsRooms:        make(map[string]map[*wsConn]clientProfile),
+		gmRooms:        make(map[string]*wsConn),
 	}
 	for _, origin := range cfg.AllowedOrigins {
 		if origin == "*" {
@@ -73,7 +75,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
-	s.mux.HandleFunc("/rooms/", s.handleRoomImages)
+	s.mux.HandleFunc("/rooms/", s.handleRoom)
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.cfg.UploadDir))))
 	s.mux.Handle("/", s.spaHandler())
 }
@@ -153,14 +155,34 @@ type imageResponse struct {
 	Y         float64   `json:"y"`
 }
 
-func (s *Server) handleRoomImages(w http.ResponseWriter, r *http.Request) {
+type clientProfile struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
 	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 || parts[0] == "" || parts[1] != "images" {
+	if len(parts) < 2 || parts[0] == "" {
 		http.NotFound(w, r)
 		return
 	}
 	roomID := parts[0]
+
+	switch parts[1] {
+	case "gm":
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		s.handleRoomGM(w, r, roomID)
+		return
+	case "images":
+		// continue
+	default:
+		http.NotFound(w, r)
+		return
+	}
 
 	if len(parts) == 2 {
 		switch r.Method {
@@ -192,6 +214,15 @@ func (s *Server) handleRoomImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.NotFound(w, r)
+}
+
+func (s *Server) handleRoomGM(w http.ResponseWriter, r *http.Request, roomID string) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"active": s.isGMActive(roomID)})
 }
 
 func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomID string) {
@@ -339,6 +370,13 @@ func (s *Server) nextPosition(roomID string) (float64, float64) {
 	return offset, row
 }
 
+func (s *Server) isGMActive(roomID string) bool {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	_, ok := s.gmRooms[roomID]
+	return ok
+}
+
 func (s *Server) deleteImage(roomID, imageID string) (imageResponse, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -376,8 +414,9 @@ func (s *Server) newID() string {
 }
 
 type wsConn struct {
-	conn net.Conn
-	mu   sync.Mutex
+	conn    net.Conn
+	mu      sync.Mutex
+	profile clientProfile
 }
 
 func (c *wsConn) write(opcode byte, payload []byte) error {
@@ -454,6 +493,21 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role := strings.ToLower(r.URL.Query().Get("role"))
+	if role == "" {
+		role = string(RolePlayer)
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = "Okänd"
+	}
+	profile := clientProfile{Name: name, Role: role}
+
+	if profile.Role == string(RoleGM) && s.isGMActive(roomID) {
+		http.Error(w, "gm already active", http.StatusConflict)
+		return
+	}
+
 	if !hasHeaderToken(r.Header.Get("Connection"), "upgrade") || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		http.Error(w, "upgrade required", http.StatusBadRequest)
 		return
@@ -506,14 +560,12 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &wsConn{conn: conn}
-	s.registerWS(roomID, client)
-	defer s.unregisterWS(roomID, client)
+	client := &wsConn{conn: conn, profile: profile}
+	s.registerWS(roomID, profile, client)
+	defer s.unregisterWS(roomID, profile, client)
 
-	go s.readLoop(roomID, client)
-
-	// Keep the connection open until read loop exits
-	select {}
+	// Block until the read loop exits so cleanup executes reliably
+	s.readLoop(roomID, client)
 }
 
 func hasHeaderToken(value, token string) bool {
@@ -537,28 +589,41 @@ func computeWebsocketAccept(key string) string {
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
-func (s *Server) registerWS(roomID string, conn *wsConn) {
+func (s *Server) registerWS(roomID string, profile clientProfile, conn *wsConn) {
 	s.wsMu.Lock()
-	defer s.wsMu.Unlock()
 	if s.wsRooms[roomID] == nil {
-		s.wsRooms[roomID] = make(map[*wsConn]struct{})
+		s.wsRooms[roomID] = make(map[*wsConn]clientProfile)
 	}
-	s.wsRooms[roomID][conn] = struct{}{}
-	s.logger.Info("ws connected", slog.String("room", roomID), slog.Int("peers", len(s.wsRooms[roomID])))
+	s.wsRooms[roomID][conn] = profile
+	if profile.Role == string(RoleGM) {
+		s.gmRooms[roomID] = conn
+	}
+	peers := len(s.wsRooms[roomID])
+	s.wsMu.Unlock()
+
+	s.logger.Info("ws connected", slog.String("room", roomID), slog.Int("peers", peers))
+	s.broadcastRoster(roomID)
 }
 
-func (s *Server) unregisterWS(roomID string, conn *wsConn) {
+func (s *Server) unregisterWS(roomID string, profile clientProfile, conn *wsConn) {
 	s.wsMu.Lock()
-	defer s.wsMu.Unlock()
 	peers := s.wsRooms[roomID]
-	if peers == nil {
-		return
+	if peers != nil {
+		delete(peers, conn)
+		if len(peers) == 0 {
+			delete(s.wsRooms, roomID)
+		}
 	}
-	delete(peers, conn)
-	if len(peers) == 0 {
-		delete(s.wsRooms, roomID)
+	if profile.Role == string(RoleGM) {
+		if current, ok := s.gmRooms[roomID]; ok && current == conn {
+			delete(s.gmRooms, roomID)
+		}
 	}
-	s.logger.Info("ws disconnected", slog.String("room", roomID), slog.Int("peers", len(peers)))
+	remaining := len(peers)
+	s.wsMu.Unlock()
+
+	s.logger.Info("ws disconnected", slog.String("room", roomID), slog.Int("peers", remaining))
+	s.broadcastRoster(roomID)
 }
 
 func (s *Server) readLoop(roomID string, client *wsConn) {
@@ -614,6 +679,36 @@ func (s *Server) broadcast(roomID string, payload []byte) {
 	for _, c := range conns {
 		if err := c.write(0x1, payload); err != nil {
 			s.logger.Error("broadcast", slog.String("error", err.Error()))
+		}
+	}
+}
+
+func (s *Server) broadcastRoster(roomID string) {
+	s.wsMu.Lock()
+	peers := s.wsRooms[roomID]
+	profiles := make([]clientProfile, 0, len(peers))
+	conns := make([]*wsConn, 0, len(peers))
+	for conn, profile := range peers {
+		profiles = append(profiles, profile)
+		conns = append(conns, conn)
+	}
+	s.wsMu.Unlock()
+
+	payload, err := json.Marshal(map[string]any{
+		"type": "RosterUpdate",
+		"payload": map[string]any{
+			"users": profiles,
+		},
+	})
+	if err != nil {
+		s.logger.Error("marshal roster", slog.String("error", err.Error()))
+		return
+	}
+
+	s.logger.Info("broadcast roster", slog.String("room", roomID), slog.Int("peers", len(conns)))
+	for _, c := range conns {
+		if err := c.write(0x1, payload); err != nil {
+			s.logger.Error("broadcast roster", slog.String("error", err.Error()))
 		}
 	}
 }

@@ -6,12 +6,15 @@ const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage }) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState({ id: null, pointerId: null });
+  const [panning, setPanning] = useState({ active: false, pointerId: null });
   const [localPositions, setLocalPositions] = useState({});
   const [renderImages, setRenderImages] = useState(images);
   const removedIdsRef = useRef(new Set());
   const dragOffset = useRef({ x: 0, y: 0 });
   const livePosition = useRef({ x: 0, y: 0 });
+  const panOrigin = useRef({ x: 0, y: 0, startX: 0, startY: 0 });
 
   useEffect(() => {
     const nextImages = images.filter((img) => !removedIdsRef.current.has(img.id));
@@ -31,8 +34,8 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
     const bounds = containerRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
     return {
-      x: (clientX - bounds.left) / scale,
-      y: (clientY - bounds.top) / scale,
+      x: (clientX - bounds.left - pan.x) / scale,
+      y: (clientY - bounds.top - pan.y) / scale,
     };
   };
 
@@ -43,6 +46,13 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
     const delta = -event.deltaY;
     const nextScale = clamp(scale + delta * 0.001, 0.5, 3);
     setScale(nextScale);
+  };
+
+  const startPan = (event) => {
+    if (dragging.id || panning.active) return;
+    panOrigin.current = { x: event.clientX, y: event.clientY, startX: pan.x, startY: pan.y };
+    containerRef.current?.setPointerCapture(event.pointerId);
+    setPanning({ active: true, pointerId: event.pointerId });
   };
 
   const handleCanvasDrop = async (event) => {
@@ -81,6 +91,12 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
   };
 
   const handlePointerMove = (event) => {
+    if (panning.active && panning.pointerId === event.pointerId) {
+      const dx = event.clientX - panOrigin.current.x;
+      const dy = event.clientY - panOrigin.current.y;
+      setPan({ x: panOrigin.current.startX + dx, y: panOrigin.current.startY + dy });
+      return;
+    }
     if (!dragging.id || dragging.pointerId !== event.pointerId) return;
     const pointer = toCanvasCoords(event.clientX, event.clientY);
     const nextPosition = { x: pointer.x - dragOffset.current.x, y: pointer.y - dragOffset.current.y };
@@ -89,6 +105,11 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
   };
 
   const endDrag = async (event) => {
+    if (panning.active && panning.pointerId === event.pointerId) {
+      containerRef.current?.releasePointerCapture(event.pointerId);
+      setPanning({ active: false, pointerId: null });
+    }
+
     if (!dragging.id || dragging.pointerId !== event.pointerId) return;
     containerRef.current?.releasePointerCapture(event.pointerId);
     const finalPosition = livePosition.current;
@@ -149,12 +170,13 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onPointerLeave={endDrag}
+      onPointerDown={startPan}
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleCanvasDrop}
       onPaste={handlePaste}
-      style={{ cursor: dragging.id ? 'grabbing' : isGM ? 'grab' : 'default' }}
+      style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
-      <div className="canvas-inner" style={{ transform: `scale(${scale})` }}>
+      <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
       </div>
