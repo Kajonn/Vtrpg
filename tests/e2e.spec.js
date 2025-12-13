@@ -97,4 +97,20 @@ test.describe('drag-drop and zoom', () => {
     expect(afterTransform).not.toEqual(initialTransform);
     expect(afterTransform).toContain('translate(');
   });
+
+  test('dice overlay can be triggered', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'gamma');
+    await page.fill('input[placeholder="Display name"]', 'Viewer');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const rollButton = page.getByRole('button', { name: /roll dice/i });
+    await expect(rollButton).toBeVisible();
+    await rollButton.click();
+
+    const status = page.locator('.dice-status');
+    await expect(status).toHaveAttribute('data-state', /rolling|settled/);
+    await expect(page.getByLabel('dice-canvas')).toBeVisible();
+  });
 });

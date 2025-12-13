@@ -51,3 +51,10 @@ Uploads are stored in the `uploads` directory (or the mounted volume) and served
 - User and room selections persist across browser refreshes so sessions seamlessly continue after reloads.
 - A logout button in the room header clears session data and safely disconnects the user.
 - All players can pan the shared canvas to explore the scene collaboratively.
+
+### Dice overlay
+
+The room view includes a synchronized, fixed-size WebGL canvas that simulates 3D dice throws using Three.js. Players in the
+same room share a deterministic seed for each roll, so every user sees the exact same trajectory and final result. A control
+panel anchored beneath the overlay lets you adjust the number of dice, roll them, and view the rolling/settled status. The
+simulation stays identical across browsers and devices by reusing the broadcast seed and fixed arena dimensions for every user.

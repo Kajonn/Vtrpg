@@ -118,6 +118,66 @@
   z-index: 1;
 }
 
+.dice-overlay {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.dice-canvas {
+  width: 720px;
+  height: 420px;
+  max-width: 100%;
+  max-height: 100%;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.4));
+}
+
+.dice-controls {
+  pointer-events: auto;
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid #1e293b;
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.dice-controls button {
+  border: 1px solid #1e293b;
+  background: #22d3ee;
+  color: #0b1220;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+}
+
+.roll-button {
+  background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+}
+
+.dice-count,
+.dice-status {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.dice-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
 .canvas-inner {
   position: relative;
   width: 100%;
