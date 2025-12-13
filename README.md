@@ -44,6 +44,8 @@ Two ways to satisfy the Playwright browser requirement without touching system p
   docker compose run --rm e2e
   ```
 
+- **Bring your own Chromium**: if the CDN downloads are blocked, point Playwright at an existing Chrome/Chromium binary. The config will automatically pick up any browser located under `.cache/ms-playwright/*/chrome-linux/chrome`, or you can set `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome` before invoking `npm run test:e2e`. To seed the cache without internet access here, you can run `PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright npx playwright install chromium` on another machine and copy the resulting `.cache/ms-playwright` directory into this repo.
+
 ## Docker
 
 Build and run with Docker:
