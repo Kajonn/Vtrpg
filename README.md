@@ -43,3 +43,11 @@ docker compose up --build
 ```
 
 Uploads are stored in the `uploads` directory (or the mounted volume) and served under `/uploads/`.
+
+## Frontend features
+
+- Only one game master (GM) can connect to a room at a time; additional GM attempts are blocked until the active GM disconnects.
+- Rooms broadcast active participant rosters, shown in a horizontal panel at the bottom of the room view.
+- User and room selections persist across browser refreshes so sessions seamlessly continue after reloads.
+- A logout button in the room header clears session data and safely disconnects the user.
+- All players can pan the shared canvas to explore the scene collaboratively.

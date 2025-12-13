@@ -57,6 +57,21 @@
   gap: 1rem;
 }
 
+.ghost-button {
+  background: transparent;
+  color: #e2e8f0;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.ghost-button:hover {
+  color: #22d3ee;
+  border-color: #22d3ee;
+}
+
 .upload-list {
   list-style: none;
   padding: 0;
@@ -184,4 +199,59 @@
 .error {
   color: #f43f5e;
   font-weight: 600;
+}
+
+.participant-panel {
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.participant-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.participant-count {
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.participant-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+}
+
+.participant-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #1e293b;
+  background: #0f172a;
+  white-space: nowrap;
+}
+
+.participant-chip--gm {
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.4);
+}
+
+.participant-name {
+  font-weight: 700;
+}
+
+.participant-role {
+  color: #94a3b8;
+  font-size: 0.85rem;
 }

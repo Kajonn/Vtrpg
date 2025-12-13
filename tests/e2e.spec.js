@@ -3,9 +3,15 @@ import { test, expect } from '@playwright/test';
 const mockImage = { id: 'demo', url: 'https://placekitten.com/400/400', status: 'done', createdAt: new Date().toISOString() };
 
 test.describe('drag-drop and zoom', () => {
+  let gmLocked = false;
+
   test.beforeEach(async ({ page }) => {
+    gmLocked = false;
     await page.route('**/rooms/**', (route, request) => {
       const method = request.method();
+      if (method === 'GET' && request.url().includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: gmLocked }) });
+      }
       if (method === 'GET' && request.url().includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify([mockImage]) });
       }
@@ -58,5 +64,37 @@ test.describe('drag-drop and zoom', () => {
       if (el) el.remove();
     }, firstId);
     await expect(page.locator('.canvas-layer')).toHaveCount(1, { timeout: 3000 });
+  });
+
+  test('prevents joining a room with an active GM', async ({ page }) => {
+    gmLocked = true;
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'alpha');
+    await page.fill('input[placeholder="Display name"]', 'GM #2');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    await expect(page.getByText('Det finns redan en spelledare i detta rum.')).toBeVisible();
+  });
+
+  test('players can pan the scene', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'beta');
+    await page.fill('input[placeholder="Display name"]', 'Explorer');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    const inner = page.locator('.canvas-inner');
+    const initialTransform = await inner.evaluate((el) => el.style.transform);
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40);
+    await page.mouse.up();
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+
+    expect(afterTransform).not.toEqual(initialTransform);
+    expect(afterTransform).toContain('translate(');
   });
 });

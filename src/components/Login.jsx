@@ -5,9 +5,32 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('gm');
   const [room, setRoom] = useState(defaultRoom || 'alpha');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
+    setError('');
+    if (!room || !name) return;
+
+    if (role === 'gm') {
+      try {
+        setSubmitting(true);
+        const response = await fetch(`/rooms/${room}/gm`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || 'Kunde inte kontrollera spelledaren.');
+        if (payload.active) {
+          setError('Det finns redan en spelledare i detta rum.');
+          return;
+        }
+      } catch (err) {
+        setError(err.message || 'Ett fel uppstod. Försök igen.');
+        return;
+      } finally {
+        setSubmitting(false);
+      }
+    }
+
     onLogin({ name, role });
     onRoomChange(room);
   };
@@ -40,7 +63,10 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
           <option value="player">Spelare</option>
         </select>
       </label>
-      <button type="submit">Enter</button>
+      {error && <p className="error">{error}</p>}
+      <button type="submit" disabled={submitting}>
+        {submitting ? 'Kontrollerar...' : 'Enter'}
+      </button>
     </form>
   );
 };
