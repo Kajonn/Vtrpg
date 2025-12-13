@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import DiceOverlay from './DiceOverlay.jsx';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage }) => {
+const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage, roomId }) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -49,6 +50,7 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
   };
 
   const startPan = (event) => {
+    if (event.target.closest('.dice-controls')) return;
     if (dragging.id || panning.active) return;
     panOrigin.current = { x: event.clientX, y: event.clientY, startX: pan.x, startY: pan.y };
     containerRef.current?.setPointerCapture(event.pointerId);
@@ -176,6 +178,7 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
       onPaste={handlePaste}
       style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
+      <DiceOverlay roomId={roomId} />
       <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
@@ -197,6 +200,7 @@ Canvas.propTypes = {
   onShareUrl: PropTypes.func,
   onMoveImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
+  roomId: PropTypes.string,
 };
 
 export default Canvas;
