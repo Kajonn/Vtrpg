@@ -139,6 +139,7 @@ const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout }) 
       <Canvas
         images={images}
         isGM={isGM}
+        roomId={roomId}
         onUploadFiles={handleUpload}
         onShareUrl={handleShareUrl}
         onMoveImage={handleMoveImage}
