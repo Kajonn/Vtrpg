@@ -1,9 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import DiceRenderer from './DiceRenderer.jsx';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage }) => {
+const Canvas = ({
+  images,
+  isGM,
+  onUploadFiles,
+  onShareUrl,
+  onMoveImage,
+  onRemoveImage,
+  diceCount,
+  diceSeed,
+  diceRollId,
+  onDiceCountChange,
+  onDiceRoll,
+}) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [dragging, setDragging] = useState({ id: null, pointerId: null });
@@ -154,6 +167,37 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
       onPaste={handlePaste}
       style={{ cursor: dragging.id ? 'grabbing' : isGM ? 'grab' : 'default' }}
     >
+      <DiceRenderer count={diceCount} seed={diceSeed} rollId={diceRollId} />
+      <div className="dice-panel">
+        <div className="dice-panel__controls">
+          <button
+            type="button"
+            className="dice-panel__button"
+            onClick={() => onDiceCountChange(Math.max(1, diceCount - 1))}
+            aria-label="Remove a die"
+          >
+            -
+          </button>
+          <span className="dice-panel__count" aria-live="polite" aria-atomic="true">
+            {diceCount} dice
+          </span>
+          <button
+            type="button"
+            className="dice-panel__button"
+            onClick={() => onDiceCountChange(Math.min(12, diceCount + 1))}
+            aria-label="Add a die"
+          >
+            +
+          </button>
+        </div>
+        <button
+          type="button"
+          className="dice-panel__roll"
+          onClick={onDiceRoll}
+        >
+          Roll dice
+        </button>
+      </div>
       <div className="canvas-inner" style={{ transform: `scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
@@ -175,6 +219,11 @@ Canvas.propTypes = {
   onShareUrl: PropTypes.func,
   onMoveImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
+  diceCount: PropTypes.number.isRequired,
+  diceSeed: PropTypes.number.isRequired,
+  diceRollId: PropTypes.number.isRequired,
+  onDiceCountChange: PropTypes.func.isRequired,
+  onDiceRoll: PropTypes.func.isRequired,
 };
 
 export default Canvas;

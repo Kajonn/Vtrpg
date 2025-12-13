@@ -2,8 +2,10 @@ package server
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -563,7 +565,7 @@ func (s *Server) unregisterWS(roomID string, conn *wsConn) {
 
 func (s *Server) readLoop(roomID string, client *wsConn) {
 	for {
-		opcode, _, err := readFrame(client.conn)
+		opcode, payload, err := readFrame(client.conn)
 		if err != nil {
 			return
 		}
@@ -573,7 +575,61 @@ func (s *Server) readLoop(roomID string, client *wsConn) {
 			return
 		case 0x9: // ping
 			_ = client.write(0xA, []byte{})
+		case 0x1: // text frame
+			s.handleClientMessage(roomID, payload)
 		}
+	}
+}
+
+func (s *Server) handleClientMessage(roomID string, payload []byte) {
+	var msg struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		s.logger.Error("parse ws message", slog.String("error", err.Error()))
+		return
+	}
+
+	switch msg.Type {
+	case "DiceRollRequest":
+		var req struct {
+			Count int `json:"count"`
+		}
+		if err := json.Unmarshal(msg.Payload, &req); err != nil {
+			s.logger.Error("parse dice request", slog.String("error", err.Error()))
+			return
+		}
+
+		if req.Count < 1 {
+			req.Count = 1
+		}
+		if req.Count > 50 {
+			req.Count = 50
+		}
+
+		seedBytes := make([]byte, 4)
+		if _, err := rand.Read(seedBytes); err != nil {
+			s.logger.Error("dice seed", slog.String("error", err.Error()))
+			binary.BigEndian.PutUint32(seedBytes, uint32(time.Now().UnixNano()))
+		}
+
+		seed := int(binary.BigEndian.Uint32(seedBytes))
+
+		payloadBytes, err := json.Marshal(map[string]any{
+			"type": "DiceRoll",
+			"payload": map[string]any{
+				"count": req.Count,
+				"seed":  seed,
+			},
+		})
+		if err != nil {
+			s.logger.Error("marshal dice roll", slog.String("error", err.Error()))
+			return
+		}
+
+		s.broadcast(roomID, payloadBytes)
 	}
 }
 
