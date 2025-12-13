@@ -27,6 +27,27 @@ Run the server locally:
 PORT=8080 go run ./cmd/server
 ```
 
+## Syncing with updated `main`
+
+If the upstream repository is reachable, add it as a remote and fetch the latest default branch:
+
+```bash
+git remote add origin <upstream-url>
+REMOTE_NAME=origin UPSTREAM_BRANCH=main scripts/upstream-sync.sh
+git merge --no-commit --no-ff origin/main
+```
+
+When network access is blocked, place a `main` bundle in the project root (for example, `upstream.bundle` created with
+`git bundle create upstream.bundle main`) and run the same helper. It will fetch from the bundle instead of a remote and stage
+`upstream/main` for merging:
+
+```bash
+UPSTREAM_BUNDLE=./upstream.bundle scripts/upstream-sync.sh
+git merge --no-commit --no-ff upstream/main
+```
+
+In either case, resolve any conflicts shown by `git status`, then commit the merge.
+
 ## End-to-end tests (Playwright)
 
 Playwright browsers can be provided three ways without touching system packages:
