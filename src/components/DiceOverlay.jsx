@@ -5,8 +5,8 @@ import * as THREE from 'three';
 const ARENA_WIDTH = 720;
 const ARENA_HEIGHT = 420;
 const DIE_SIZE = 32;
-const FIXED_DT = 1 / 60;
 const MAX_STEPS = 420;
+const WALL_THICKNESS = 12;
 
 const mulberry32 = (seed) => {
   let t = seed + 0x6d2b79f5;
@@ -30,6 +30,8 @@ const DiceOverlay = ({ roomId }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
+  const rapierRef = useRef(null);
+  const worldRef = useRef(null);
   const diceRef = useRef([]);
   const stepRef = useRef(0);
   const animationRef = useRef(null);
@@ -41,6 +43,12 @@ const DiceOverlay = ({ roomId }) => {
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    const world = worldRef.current;
+    diceRef.current.forEach((die) => {
+      const body = world?.getRigidBody(die.bodyHandle);
+      if (body) world.removeRigidBody(body);
+      sceneRef.current?.remove(die.mesh);
+    });
     diceRef.current = [];
     stepRef.current = 0;
   };
@@ -73,12 +81,77 @@ const DiceOverlay = ({ roomId }) => {
     sceneRef.current = scene;
   };
 
+  const buildBounds = () => {
+    const RAPIER = rapierRef.current;
+    const world = worldRef.current;
+    if (!RAPIER || !world) return;
+
+    const halfWidth = ARENA_WIDTH / 2;
+    const halfHeight = ARENA_HEIGHT / 2;
+    const depth = DIE_SIZE * 2;
+    const wallHalf = WALL_THICKNESS / 2;
+
+    const walls = [
+      {
+        translation: { x: halfWidth + wallHalf, y: 0, z: 0 },
+        halfExtents: { x: wallHalf, y: halfHeight + WALL_THICKNESS, z: depth },
+      },
+      {
+        translation: { x: -halfWidth - wallHalf, y: 0, z: 0 },
+        halfExtents: { x: wallHalf, y: halfHeight + WALL_THICKNESS, z: depth },
+      },
+      {
+        translation: { x: 0, y: halfHeight + wallHalf, z: 0 },
+        halfExtents: { x: halfWidth + WALL_THICKNESS, y: wallHalf, z: depth },
+      },
+      {
+        translation: { x: 0, y: -halfHeight - wallHalf, z: 0 },
+        halfExtents: { x: halfWidth + WALL_THICKNESS, y: wallHalf, z: depth },
+      },
+    ];
+
+    walls.forEach(({ translation, halfExtents }) => {
+      const rigidBody = world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(translation.x, translation.y, translation.z)
+      );
+      world.createCollider(
+        RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+          .setRestitution(0.6)
+          .setFriction(0.5),
+        rigidBody
+      );
+    });
+  };
+
+  const initializePhysics = async () => {
+    if (rapierRef.current && worldRef.current) return;
+    const RAPIER = await import('@dimforge/rapier3d-compat');
+    await RAPIER.init();
+    rapierRef.current = RAPIER;
+    worldRef.current = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    buildBounds();
+  };
+
   const randomInRange = (rng, min, max) => min + (max - min) * rng();
 
+  const randomRotation = (rng) => {
+    const euler = new THREE.Euler(randomInRange(rng, 0, Math.PI * 2), randomInRange(rng, 0, Math.PI * 2), randomInRange(rng, 0, Math.PI * 2));
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromEuler(euler);
+    return quaternion;
+  };
+
   const seedDice = (seed, count) => {
+    const world = worldRef.current;
+    const RAPIER = rapierRef.current;
+    const scene = sceneRef.current;
+    if (!world || !RAPIER || !scene) return;
+
     const rng = mulberry32(seed);
+    teardown();
     const dice = Array.from({ length: count }, () => {
       const mesh = createDieMesh();
+      const rotation = randomRotation(rng);
       return {
         mesh,
         position: {
@@ -88,119 +161,82 @@ const DiceOverlay = ({ roomId }) => {
         velocity: {
           x: randomInRange(rng, -240, 240),
           y: randomInRange(rng, 180, 320),
+          z: 0,
         },
         angularVelocity: {
           x: randomInRange(rng, -4, 4),
           y: randomInRange(rng, -4, 4),
           z: randomInRange(rng, -4, 4),
         },
-        rotation: {
-          x: randomInRange(rng, 0, Math.PI * 2),
-          y: randomInRange(rng, 0, Math.PI * 2),
-          z: randomInRange(rng, 0, Math.PI * 2),
-        },
+        rotation,
       };
     });
 
-    diceRef.current = dice;
-    stepRef.current = 0;
-  };
+    const preparedDice = dice.map((die) => {
+      const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(die.position.x, die.position.y, 0)
+        .setRotation({ w: die.rotation.w, x: die.rotation.x, y: die.rotation.y, z: die.rotation.z })
+        .setLinearDamping(0.48)
+        .setAngularDamping(0.72)
+        .setCcdEnabled(true);
 
-  const resolveCollisions = () => {
-    const dice = diceRef.current;
-    for (let i = 0; i < dice.length; i += 1) {
-      for (let j = i + 1; j < dice.length; j += 1) {
-        const a = dice[i];
-        const b = dice[j];
-        const dx = b.position.x - a.position.x;
-        const dy = b.position.y - a.position.y;
-        const distance = Math.sqrt(dx * dx + dy * dy) || 1;
-        const minDist = DIE_SIZE;
-        if (distance < minDist) {
-          const overlap = (minDist - distance) / 2;
-          const nx = dx / distance;
-          const ny = dy / distance;
-          a.position.x -= nx * overlap;
-          a.position.y -= ny * overlap;
-          b.position.x += nx * overlap;
-          b.position.y += ny * overlap;
+      const body = world.createRigidBody(bodyDesc);
+      body.setLinvel(die.velocity, true);
+      body.setAngvel(die.angularVelocity, true);
 
-          const va = a.velocity.x * nx + a.velocity.y * ny;
-          const vb = b.velocity.x * nx + b.velocity.y * ny;
-          const exchange = vb - va;
-          a.velocity.x += exchange * nx;
-          a.velocity.y += exchange * ny;
-          b.velocity.x -= exchange * nx;
-          b.velocity.y -= exchange * ny;
-        }
-      }
-    }
-  };
+      const colliderDesc = RAPIER.ColliderDesc.cuboid(DIE_SIZE / 2, DIE_SIZE / 2, DIE_SIZE / 2)
+        .setRestitution(0.55)
+        .setFriction(0.32);
 
-  const stepPhysics = () => {
-    const dice = diceRef.current;
-    dice.forEach((die) => {
-      die.position.x += die.velocity.x * FIXED_DT;
-      die.position.y += die.velocity.y * FIXED_DT;
+      world.createCollider(colliderDesc, body);
+      scene.add(die.mesh);
 
-      die.rotation.x += die.angularVelocity.x * FIXED_DT;
-      die.rotation.y += die.angularVelocity.y * FIXED_DT;
-      die.rotation.z += die.angularVelocity.z * FIXED_DT;
-
-      die.velocity.x *= 0.992;
-      die.velocity.y *= 0.992;
-      die.angularVelocity.x *= 0.985;
-      die.angularVelocity.y *= 0.985;
-      die.angularVelocity.z *= 0.985;
-
-      const limitX = ARENA_WIDTH / 2 - DIE_SIZE / 2;
-      const limitY = ARENA_HEIGHT / 2 - DIE_SIZE / 2;
-      if (die.position.x < -limitX) {
-        die.position.x = -limitX;
-        die.velocity.x *= -0.82;
-      } else if (die.position.x > limitX) {
-        die.position.x = limitX;
-        die.velocity.x *= -0.82;
-      }
-      if (die.position.y < -limitY) {
-        die.position.y = -limitY;
-        die.velocity.y *= -0.82;
-      } else if (die.position.y > limitY) {
-        die.position.y = limitY;
-        die.velocity.y *= -0.82;
-      }
+      return { mesh: die.mesh, bodyHandle: body.handle };
     });
 
-    resolveCollisions();
+    diceRef.current = preparedDice;
+    stepRef.current = 0;
   };
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
     const scene = sceneRef.current;
-    if (!renderer || !camera || !scene) return;
+    const world = worldRef.current;
+    const RAPIER = rapierRef.current;
+    if (!renderer || !camera || !scene || !world || !RAPIER) return;
 
     diceRef.current.forEach((die) => {
-      if (!scene.children.includes(die.mesh)) scene.add(die.mesh);
-      die.mesh.position.set(die.position.x, die.position.y, 0);
-      die.mesh.rotation.set(die.rotation.x, die.rotation.y, die.rotation.z);
+      const body = world.getRigidBody(die.bodyHandle);
+      if (!body) return;
+      const translation = body.translation();
+      const rotation = body.rotation();
+      die.mesh.position.set(translation.x, translation.y, translation.z);
+      die.mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
     });
 
     renderer.render(scene, camera);
   };
 
   const tick = () => {
-    stepPhysics();
+    const world = worldRef.current;
+    if (!world) return;
+    world.step();
     renderFrame();
     stepRef.current += 1;
 
-    const stillMoving = diceRef.current.some(
-      (die) =>
-        Math.abs(die.velocity.x) > 2 ||
-        Math.abs(die.velocity.y) > 2 ||
-        Math.abs(die.angularVelocity.x) > 0.2 ||
-        Math.abs(die.angularVelocity.y) > 0.2 ||
-        Math.abs(die.angularVelocity.z) > 0.2
-    );
+    const stillMoving = diceRef.current.some((die) => {
+      const body = world.getRigidBody(die.bodyHandle);
+      if (!body) return false;
+      const linvel = body.linvel();
+      const angvel = body.angvel();
+      return (
+        Math.abs(linvel.x) > 1.2 ||
+        Math.abs(linvel.y) > 1.2 ||
+        Math.abs(angvel.x) > 0.18 ||
+        Math.abs(angvel.y) > 0.18 ||
+        Math.abs(angvel.z) > 0.18
+      );
+    });
 
     if (stepRef.current < MAX_STEPS && stillMoving) {
       animationRef.current = requestAnimationFrame(tick);
@@ -209,8 +245,8 @@ const DiceOverlay = ({ roomId }) => {
     }
   };
 
-  const startSimulation = (seed, count) => {
-    teardown();
+  const startSimulation = async (seed, count) => {
+    await initializePhysics();
     seedDice(seed, count);
     setStatus('rolling');
     animationRef.current = requestAnimationFrame(tick);
@@ -218,9 +254,11 @@ const DiceOverlay = ({ roomId }) => {
 
   useEffect(() => {
     setupScene();
+    initializePhysics();
 
     return () => {
       teardown();
+      worldRef.current = null;
       rendererRef.current?.renderer?.dispose();
       rendererRef.current = null;
       sceneRef.current = null;
