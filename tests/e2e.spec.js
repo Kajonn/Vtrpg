@@ -12,6 +12,13 @@ test.describe('drag-drop and zoom', () => {
       if (method === 'GET' && request.url().includes('/gm')) {
         return route.fulfill({ status: 200, body: JSON.stringify({ active: gmLocked }) });
       }
+      if (method === 'GET' && request.url().includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && request.url().includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
       if (method === 'GET' && request.url().includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify([mockImage]) });
       }
@@ -131,6 +138,13 @@ test.describe('drag-drop and zoom', () => {
         const method = request.method();
         if (method === 'GET' && request.url().includes('/gm')) {
           return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+        }
+        if (method === 'GET' && request.url().includes('/dice')) {
+          return route.fulfill({ status: 200, body: JSON.stringify([]) });
+        }
+        if (method === 'POST' && request.url().includes('/dice')) {
+          const body = request.postDataJSON?.() || {};
+          return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
         }
         if (method === 'GET' && request.url().includes('/images')) {
           return route.fulfill({ status: 200, body: JSON.stringify([]) });

@@ -47,6 +47,7 @@ type SharedImage struct {
 
 // DiceRollPayload represents a dice roll synchronization message.
 type DiceRollPayload struct {
-	Seed  uint32 `json:"seed"`
-	Count int    `json:"count"`
+	Seed        uint32 `json:"seed"`
+	Count       int    `json:"count"`
+	TriggeredBy string `json:"triggeredBy"`
 }

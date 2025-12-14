@@ -36,7 +36,7 @@ const createDieMesh = () => {
   return mesh;
 };
 
-const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult }) => {
+const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
@@ -224,7 +224,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult }) => {
     if (!onDiceResult) return;
     const roll = currentRollRef.current;
     if (!roll) return;
-    const rollId = `${roll.seed}-${roll.count}`;
+    const rollId = `${roll.seed}-${roll.count}-${roll.triggeredBy || 'unknown'}`;
     if (reportedRollRef.current === rollId) return;
     const results = collectResults();
     if (!results.length) return;
@@ -351,12 +351,12 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult }) => {
     }
   };
 
-  const startSimulation = async (seed, count) => {
+  const startSimulation = async ({ seed, count, triggeredBy }) => {
     await initializePhysics();
     seedDice(seed, count);
     setStatus('rolling');
     rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    currentRollRef.current = { seed, count };
+    currentRollRef.current = { seed, count, triggeredBy };
     reportedRollRef.current = null;
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
     settleTimeoutRef.current = setTimeout(() => {
@@ -383,13 +383,13 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult }) => {
   useEffect(() => {
     if (!diceRoll || !diceRoll.seed || !diceRoll.count) return;
     if (currentRollRef.current?.seed === diceRoll.seed && currentRollRef.current?.count === diceRoll.count) return;
-    startSimulation(diceRoll.seed, diceRoll.count);
+    startSimulation(diceRoll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diceRoll]);
 
-  const broadcastRoll = (seed, count) => {
+  const broadcastRoll = (seed, count, triggeredBy) => {
     if (!onSendDiceRoll) return;
-    onSendDiceRoll(seed, count);
+    onSendDiceRoll(seed, count, triggeredBy);
   };
 
   const rollDice = () => {
@@ -397,9 +397,10 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult }) => {
     const seed = hasCrypto
       ? crypto.getRandomValues(new Uint32Array(1))[0]
       : Math.floor(Math.random() * 1_000_000_000) || Date.now();
+    const triggeredBy = userName || 'Okänd';
     setStatus('rolling');
-    broadcastRoll(seed, diceCount);
-    startSimulation(seed, diceCount);
+    broadcastRoll(seed, diceCount, triggeredBy);
+    startSimulation({ seed, count: diceCount, triggeredBy });
   };
 
   return (
@@ -431,6 +432,7 @@ DiceOverlay.propTypes = {
   diceRoll: PropTypes.object,
   onSendDiceRoll: PropTypes.func,
   onDiceResult: PropTypes.func,
+  userName: PropTypes.string,
 };
 
 export default DiceOverlay;

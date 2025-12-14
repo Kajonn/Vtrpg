@@ -14,6 +14,7 @@ const Room = ({
   images,
   participants,
   onImagesUpdate,
+  onDiceLogUpdate,
   onLogout,
   diceRoll,
   onSendDiceRoll,
@@ -32,7 +33,16 @@ const Room = ({
       .then((data) => onImagesUpdate(data))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [roomId, onImagesUpdate]);
+    if (onDiceLogUpdate) {
+      fetch(`/rooms/${roomId}/dice`)
+        .then((response) => {
+          if (!response.ok) throw new Error('Failed to load dice log');
+          return response.json();
+        })
+        .then((log) => onDiceLogUpdate(Array.isArray(log) ? log : []))
+        .catch((err) => setError((prev) => prev || err.message));
+    }
+  }, [roomId, onImagesUpdate, onDiceLogUpdate]);
 
   const persistPosition = async (imageId, position) => {
     if (!position) return;
@@ -158,6 +168,7 @@ const Room = ({
         diceRoll={diceRoll}
         onSendDiceRoll={onSendDiceRoll}
         onDiceResult={onDiceResult}
+        userName={user.name}
       />
 
       <section className="log-window" aria-label="dice-log">
@@ -165,12 +176,12 @@ const Room = ({
           <h3>Tärningslogg</h3>
           <span className="log-window__hint">Senaste slaget visas först</span>
         </div>
-        {diceLog?.length ? (
+                {diceLog?.length ? (
           <ol className="log-window__list">
             {diceLog.map((entry, index) => (
               <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
                 <div className="log-window__meta">
-                  <span>Slag {index + 1}</span>
+                  <span>Slag {index + 1} av {entry.triggeredBy || 'Okänd'}</span>
                   <span className="log-window__seed">Seed: {entry.seed}</span>
                 </div>
                 <div className="log-window__dice">
@@ -230,6 +241,7 @@ Room.propTypes = {
     y: PropTypes.number,
   })).isRequired,
   onImagesUpdate: PropTypes.func.isRequired,
+  onDiceLogUpdate: PropTypes.func,
   onLogout: PropTypes.func.isRequired,
   diceRoll: PropTypes.object,
   onSendDiceRoll: PropTypes.func,
@@ -239,6 +251,8 @@ Room.propTypes = {
       seed: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
       count: PropTypes.number,
       results: PropTypes.arrayOf(PropTypes.number),
+      triggeredBy: PropTypes.string,
+      timestamp: PropTypes.string,
     })
   ),
   onDiceResult: PropTypes.func,

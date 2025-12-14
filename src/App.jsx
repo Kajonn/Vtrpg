@@ -60,6 +60,7 @@ const App = () => {
     setUser(null);
     setSharedImages([]);
     setParticipants([]);
+    setDiceLog([]);
     setConnectionError('');
     localStorage.removeItem('vtrpg.session');
   }, []);
@@ -101,28 +102,47 @@ const App = () => {
       });
       setParticipants(sorted);
     } else if (message?.type === 'DiceRoll') {
-      setDiceRoll(message.payload);
-      diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload: message.payload });
+      const payload = {
+        ...message.payload,
+        triggeredBy: message.payload?.triggeredBy || 'Okänd',
+      };
+      setDiceRoll(payload);
+      diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
+    } else if (message?.type === 'DiceLogEntry' && message.payload) {
+      setDiceLog((prev) => [message.payload, ...prev.filter((entry) => entry.id !== message.payload.id)].slice(0, 50));
     }
   }, []);
 
   const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
 
-  const sendDiceRoll = useCallback((seed, count) => {
-    const payload = { seed, count };
+  const sendDiceRoll = useCallback((seed, count, triggeredBy) => {
+    const roller = triggeredBy || user?.name || 'Okänd';
+    const payload = { seed, count, triggeredBy: roller };
     diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const message = JSON.stringify({ type: 'DiceRoll', payload });
     socket.send(message);
-  }, [socket]);
+  }, [socket, user?.name]);
 
-  const handleDiceResult = useCallback(({ seed, count, results }) => {
+  const handleDiceResult = useCallback(({ seed, count, results, triggeredBy }) => {
     const timestamp = new Date().toISOString();
-    setDiceLog((prev) => [
-      { id: `${seed}-${timestamp}`, seed, count, results, timestamp },
-      ...prev,
-    ].slice(0, 20));
-  }, []);
+    const roller = triggeredBy || diceRoll?.triggeredBy || user?.name || 'Okänd';
+    const entry = { id: `${seed}-${timestamp}`, seed, count, results, timestamp, triggeredBy: roller };
+    setDiceLog((prev) => [entry, ...prev.filter((item) => item.id !== entry.id)].slice(0, 50));
+
+    if (roller === user?.name) {
+      fetch(`/rooms/${roomId}/dice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed, count, results, triggeredBy: roller, timestamp }),
+      })
+        .then((response) => response.json())
+        .then((saved) => {
+          setDiceLog((prev) => [saved, ...prev.filter((item) => item.id !== saved.id && item.seed !== saved.seed)].slice(0, 50));
+        })
+        .catch(() => {});
+    }
+  }, [diceRoll, roomId, user?.name]);
 
   const sortedImages = useMemo(
     () => [...sharedImages].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
@@ -132,6 +152,7 @@ const App = () => {
   useEffect(() => {
     setConnectionError('');
     setParticipants([]);
+    setDiceLog([]);
   }, [roomId, user]);
 
   useEffect(() => {
@@ -149,7 +170,11 @@ const App = () => {
     const channel = new BroadcastChannel(channelName);
     channel.onmessage = (event) => {
       if (event.data?.type === 'DiceRoll' && event.data?.payload) {
-        setDiceRoll(event.data.payload);
+        const payload = {
+          ...event.data.payload,
+          triggeredBy: event.data.payload?.triggeredBy || 'Okänd',
+        };
+        setDiceRoll(payload);
       }
     };
     diceChannelRef.current = channel;
@@ -176,6 +201,7 @@ const App = () => {
           participants={participants}
           onLogout={handleLogout}
           onImagesUpdate={setSharedImages}
+          onDiceLogUpdate={setDiceLog}
           diceRoll={diceRoll}
           onSendDiceRoll={sendDiceRoll}
           diceLog={diceLog}
