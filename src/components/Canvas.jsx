@@ -201,7 +201,11 @@ Canvas.propTypes = {
   onMoveImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
   roomId: PropTypes.string,
-  diceRoll: PropTypes.object,
+  diceRoll: PropTypes.shape({
+    seed: PropTypes.number,
+    count: PropTypes.number,
+    sides: PropTypes.number,
+  }),
   onSendDiceRoll: PropTypes.func,
 };
 

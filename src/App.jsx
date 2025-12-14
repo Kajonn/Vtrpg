@@ -105,9 +105,9 @@ const App = () => {
 
   const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
 
-  const sendDiceRoll = useCallback((seed, count) => {
+  const sendDiceRoll = useCallback((seed, count, sides) => {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    const message = JSON.stringify({ type: 'DiceRoll', payload: { seed, count } });
+    const message = JSON.stringify({ type: 'DiceRoll', payload: { seed, count, sides } });
     socket.send(message);
   }, [socket]);
 

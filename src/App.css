@@ -178,6 +178,25 @@
   gap: 0.25rem;
 }
 
+.dice-type-buttons {
+  display: flex;
+  gap: 0.25rem;
+  background: #0b1220;
+  border-radius: 999px;
+  padding: 0.15rem 0.35rem;
+}
+
+.dice-type-buttons button {
+  background: #cbd5e1;
+  border: 1px solid #1e293b;
+  color: #0f172a;
+}
+
+.dice-type-buttons button.active {
+  background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+  color: #0b1220;
+}
+
 .canvas-inner {
   position: relative;
   width: 100%;

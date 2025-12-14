@@ -1,12 +1,73 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 const ARENA_WIDTH = 720;
 const ARENA_HEIGHT = 420;
 const DIE_SIZE = 32;
-const MAX_STEPS = 420;
+const MAX_STEPS = 180;
 const WALL_THICKNESS = 12;
+
+const DICE_TYPES = [4, 6, 8, 10, 12, 20];
+
+const DIE_MODEL_PATHS = {
+  4: new URL('../assets/dice/d4.gltf', import.meta.url).href,
+  6: new URL('../assets/dice/d6.gltf', import.meta.url).href,
+  8: new URL('../assets/dice/d8.gltf', import.meta.url).href,
+  10: new URL('../assets/dice/d10.gltf', import.meta.url).href,
+  12: new URL('../assets/dice/d12.gltf', import.meta.url).href,
+  20: new URL('../assets/dice/d20.gltf', import.meta.url).href,
+};
+
+const extractVertices = (geometry) => {
+  const position = geometry.getAttribute('position');
+  if (!position) return [];
+  const seen = new Set();
+  const unique = [];
+  for (let i = 0; i < position.count; i += 1) {
+    const x = position.getX(i);
+    const y = position.getY(i);
+    const z = position.getZ(i);
+    const key = `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(x, y, z);
+  }
+  return unique;
+};
+
+const createColliderForSides = (RAPIER, sides, geometry) => {
+  if (sides === 6) {
+    return RAPIER.ColliderDesc.cuboid(DIE_SIZE / 2, DIE_SIZE / 2, DIE_SIZE / 2)
+      .setRestitution(0.55)
+      .setFriction(0.32);
+  }
+
+  const vertices = extractVertices(geometry);
+  const convex = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
+  if (convex) {
+    convex.setRestitution(0.55).setFriction(0.32);
+    return convex;
+  }
+
+  return RAPIER.ColliderDesc.ball(DIE_SIZE / 2).setRestitution(0.55).setFriction(0.32);
+};
+
+const prepareDieMesh = (entry) => {
+  if (!entry) return null;
+  const mesh = entry.template.clone(true);
+  mesh.traverse((node) => {
+    if (node.isMesh) {
+      node.geometry = entry.geometry;
+      node.material = node.material?.clone?.() || node.material;
+      node.castShadow = true;
+      node.receiveShadow = true;
+    }
+  });
+
+  return { mesh, geometry: entry.geometry };
+};
 
 const mulberry32 = (seed) => {
   let t = seed + 0x6d2b79f5;
@@ -17,28 +78,29 @@ const mulberry32 = (seed) => {
   };
 };
 
-const createDieMesh = () => {
-  const geometry = new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE);
-  const material = new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.2, roughness: 0.6 });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-};
-
 const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
+  const gltfLoaderRef = useRef(new GLTFLoader());
   const rapierRef = useRef(null);
   const worldRef = useRef(null);
+  const channelRef = useRef(null);
+  const instanceIdRef = useRef(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  const sharedWorkerRef = useRef(null);
   const diceRef = useRef([]);
+  const settleTimeoutRef = useRef(null);
   const stepRef = useRef(0);
+  const diceModelsRef = useRef({});
   const animationRef = useRef(null);
+  const pendingRollRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
+  const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
+  const [modelsReady, setModelsReady] = useState(false);
 
-  const channelName = useMemo(() => `vtrpg-dice-${roomId || 'default'}`, [roomId]);
+  const roomKey = useMemo(() => roomId || 'default', [roomId]);
+  const channelName = useMemo(() => `vtrpg-dice-${roomKey}`, [roomKey]);
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -51,6 +113,61 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     diceRef.current = [];
     stepRef.current = 0;
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loader = gltfLoaderRef.current;
+
+    const loadModels = async () => {
+      try {
+        const entries = await Promise.all(
+          DICE_TYPES.map(async (sides) => {
+            const gltf = await loader.loadAsync(DIE_MODEL_PATHS[sides]);
+            let firstMesh = null;
+            gltf.scene.traverse((child) => {
+              if (!firstMesh && child.isMesh) {
+                firstMesh = child;
+              }
+            });
+
+            const template = (firstMesh || gltf.scene).clone(true);
+            let geometry = firstMesh?.geometry || (template.isMesh ? template.geometry : null);
+            if (!geometry) {
+              throw new Error(`No geometry found for d${sides}`);
+            }
+            geometry = geometry.clone();
+            geometry.computeVertexNormals();
+
+            template.traverse((node) => {
+              if (node.isMesh) {
+                node.geometry = geometry;
+                node.material = node.material?.clone?.() || node.material;
+                node.castShadow = true;
+                node.receiveShadow = true;
+              }
+            });
+
+            return [sides, { template, geometry }];
+          })
+        );
+
+        if (!cancelled) {
+          entries.forEach(([sides, entry]) => {
+            diceModelsRef.current[sides] = entry;
+          });
+          setModelsReady(true);
+        }
+      } catch (error) {
+        console.error('Failed to load dice models', error);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const setupScene = () => {
     const canvas = canvasRef.current;
@@ -159,14 +276,14 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     );
   };
 
-  const initializePhysics = async () => {
+  const initializePhysics = useCallback(async () => {
     if (rapierRef.current && worldRef.current) return;
     const RAPIER = await import('@dimforge/rapier3d-compat');
     await RAPIER.init();
     rapierRef.current = RAPIER;
     worldRef.current = new RAPIER.World({ x: 0, y: 0, z: -600 });
     buildBounds();
-  };
+  }, []);
 
   const randomInRange = (rng, min, max) => min + (max - min) * rng();
 
@@ -177,19 +294,26 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     return quaternion;
   };
 
-  const seedDice = (seed, count) => {
+  const seedDice = useCallback((seed, count, sides) => {
     const world = worldRef.current;
     const RAPIER = rapierRef.current;
     const scene = sceneRef.current;
     if (!world || !RAPIER || !scene) return;
 
+    const modelEntry = diceModelsRef.current[sides];
+    if (!modelEntry) {
+      setStatus('loading');
+      return;
+    }
+
     const rng = mulberry32(seed);
     teardown();
     const dice = Array.from({ length: count }, () => {
-      const mesh = createDieMesh();
+      const { mesh, geometry } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
       return {
         mesh,
+        geometry,
         position: {
           x: randomInRange(rng, -ARENA_WIDTH / 2 + DIE_SIZE, ARENA_WIDTH / 2 - DIE_SIZE),
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
@@ -220,9 +344,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       body.setLinvel(die.velocity, true);
       body.setAngvel(die.angularVelocity, true);
 
-      const colliderDesc = RAPIER.ColliderDesc.cuboid(DIE_SIZE / 2, DIE_SIZE / 2, DIE_SIZE / 2)
-        .setRestitution(0.55)
-        .setFriction(0.32);
+      const colliderDesc = createColliderForSides(RAPIER, sides, die.geometry);
 
       world.createCollider(colliderDesc, body);
       scene.add(die.mesh);
@@ -232,7 +354,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
 
     diceRef.current = preparedDice;
     stepRef.current = 0;
-  };
+  }, []);
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
@@ -266,27 +388,74 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       const linvel = body.linvel();
       const angvel = body.angvel();
       return (
-        Math.abs(linvel.x) > 1.2 ||
-        Math.abs(linvel.y) > 1.2 ||
-        Math.abs(angvel.x) > 0.18 ||
-        Math.abs(angvel.y) > 0.18 ||
-        Math.abs(angvel.z) > 0.18
+        Math.abs(linvel.x) > 1.6 ||
+        Math.abs(linvel.y) > 1.6 ||
+        Math.abs(angvel.x) > 0.25 ||
+        Math.abs(angvel.y) > 0.25 ||
+        Math.abs(angvel.z) > 0.25
       );
     });
 
     if (stepRef.current < MAX_STEPS && stillMoving) {
       animationRef.current = requestAnimationFrame(tick);
     } else {
+      if (settleTimeoutRef.current) {
+        clearTimeout(settleTimeoutRef.current);
+        settleTimeoutRef.current = null;
+      }
       setStatus('settled');
     }
   };
 
-  const startSimulation = async (seed, count) => {
-    await initializePhysics();
-    seedDice(seed, count);
-    setStatus('rolling');
-    animationRef.current = requestAnimationFrame(tick);
-  };
+  const startSimulation = useCallback(
+    async (seed, count, sides) => {
+      if (!modelsReady || !diceModelsRef.current[sides]) {
+        setStatus('loading');
+        pendingRollRef.current = { seed, count, sides };
+        return;
+      }
+
+      pendingRollRef.current = null;
+      setStatus('rolling');
+      if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+      settleTimeoutRef.current = setTimeout(() => setStatus('settled'), 3200);
+      await initializePhysics();
+      seedDice(seed, count, sides);
+      animationRef.current = requestAnimationFrame(tick);
+    },
+    [initializePhysics, modelsReady, seedDice]
+  );
+
+  useEffect(() => {
+    if (modelsReady && pendingRollRef.current) {
+      const pending = pendingRollRef.current;
+      pendingRollRef.current = null;
+      startSimulation(pending.seed, pending.count, pending.sides);
+    }
+  }, [modelsReady, startSimulation]);
+
+  const postLocalRoll = useCallback(
+    (seed, count, sides) => {
+      const message = { type: 'dice-roll', seed, count, sides, room: roomKey, source: instanceIdRef.current };
+      if (sharedWorkerRef.current) {
+        sharedWorkerRef.current.postMessage(message);
+      }
+      if (channelRef.current) {
+        channelRef.current.postMessage(message);
+      }
+    },
+    [roomKey]
+  );
+
+  const handleIncomingRoll = useCallback(
+    (data) => {
+      if (!data || data.type !== 'dice-roll' || data.room !== roomKey || data.source === instanceIdRef.current) return;
+      const nextSides = data.sides || diceSides;
+      setDiceSides(nextSides);
+      startSimulation(data.seed, data.count, nextSides);
+    },
+    [diceSides, roomKey, startSimulation]
+  );
 
   useEffect(() => {
     setupScene();
@@ -298,19 +467,63 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       rendererRef.current?.renderer?.dispose();
       rendererRef.current = null;
       sceneRef.current = null;
+      if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!diceRoll || !diceRoll.seed || !diceRoll.count) return;
-    startSimulation(diceRoll.seed, diceRoll.count);
+    const nextSides = diceRoll.sides || diceSides;
+    postLocalRoll(diceRoll.seed, diceRoll.count, nextSides);
+    if (diceRoll.sides) setDiceSides(diceRoll.sides);
+    startSimulation(diceRoll.seed, diceRoll.count, nextSides);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diceRoll]);
 
-  const broadcastRoll = (seed, count) => {
+  useEffect(() => {
+    const cleanupFns = [];
+
+    if (typeof SharedWorker !== 'undefined') {
+      try {
+        const worker = new SharedWorker(new URL('../workers/diceBus.js', import.meta.url), {
+          type: 'module',
+          name: 'vtrpg-dice-bus',
+        });
+        worker.port.start();
+        worker.port.onmessage = (event) => handleIncomingRoll(event.data);
+        sharedWorkerRef.current = worker.port;
+        cleanupFns.push(() => {
+          worker.port.onmessage = null;
+          worker.port.close();
+          sharedWorkerRef.current = null;
+        });
+      } catch (error) {
+        console.warn('SharedWorker not available for dice sync', error);
+      }
+    }
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel(channelName);
+      channel.onmessage = (event) => handleIncomingRoll(event.data);
+      channelRef.current = channel;
+      cleanupFns.push(() => {
+        channel.onmessage = null;
+        channel.close();
+        channelRef.current = null;
+      });
+    }
+
+    return () => {
+      cleanupFns.forEach((fn) => fn());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelName, handleIncomingRoll]);
+
+  const broadcastRoll = (seed, count, sides) => {
+    postLocalRoll(seed, count, sides);
     if (!onSendDiceRoll) return;
-    onSendDiceRoll(seed, count);
+    onSendDiceRoll(seed, count, sides);
   };
 
   const rollDice = () => {
@@ -319,9 +532,18 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       ? crypto.getRandomValues(new Uint32Array(1))[0]
       : Math.floor(Math.random() * 1_000_000_000) || Date.now();
     setStatus('rolling');
-    broadcastRoll(seed, diceCount);
-    startSimulation(seed, diceCount);
+    broadcastRoll(seed, diceCount, diceSides);
+    startSimulation(seed, diceCount, diceSides);
   };
+
+  const isRollingDisabled = !modelsReady || status === 'rolling';
+  const statusLabel = !modelsReady
+    ? 'Loading dice models...'
+    : status === 'rolling'
+      ? 'Rolling...'
+      : status === 'settled'
+        ? 'Result locked'
+        : 'Idle';
 
   return (
     <div className="dice-overlay" aria-label="dice-overlay">
@@ -336,11 +558,30 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
             +
           </button>
         </div>
-        <button type="button" className="roll-button" onClick={rollDice} aria-label="roll dice">
+        <div className="dice-type-buttons" role="group" aria-label="Select dice type">
+          {DICE_TYPES.map((sides) => (
+            <button
+              key={sides}
+              type="button"
+              className={sides === diceSides ? 'active' : ''}
+              onClick={() => setDiceSides(sides)}
+              aria-label={`use d${sides}`}
+            >
+              d{sides}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="roll-button"
+          onClick={rollDice}
+          aria-label="roll dice"
+          disabled={isRollingDisabled}
+        >
           Roll dice
         </button>
-        <div className="dice-status" data-state={status}>
-          {status === 'rolling' ? 'Rolling...' : status === 'settled' ? 'Result locked' : 'Idle'}
+        <div className="dice-status" data-state={!modelsReady ? 'loading' : status}>
+          {statusLabel} (d{diceSides})
         </div>
       </div>
     </div>
@@ -349,7 +590,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
 
 DiceOverlay.propTypes = {
   roomId: PropTypes.string,
-  diceRoll: PropTypes.object,
+  diceRoll: PropTypes.shape({
+    seed: PropTypes.number,
+    count: PropTypes.number,
+    sides: PropTypes.number,
+  }),
   onSendDiceRoll: PropTypes.func,
 };
 

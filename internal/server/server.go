@@ -745,7 +745,13 @@ func (s *Server) broadcastDiceRoll(roomID string, diceRoll DiceRollPayload) {
 		s.logger.Error("marshal dice roll", slog.String("error", err.Error()))
 		return
 	}
-	s.logger.Info("broadcast dice roll", slog.String("room", roomID), slog.Uint64("seed", uint64(diceRoll.Seed)), slog.Int("count", diceRoll.Count))
+	s.logger.Info(
+		"broadcast dice roll",
+		slog.String("room", roomID),
+		slog.Uint64("seed", uint64(diceRoll.Seed)),
+		slog.Int("count", diceRoll.Count),
+		slog.Int("sides", diceRoll.Sides),
+	)
 	s.broadcast(roomID, payload)
 }
 
