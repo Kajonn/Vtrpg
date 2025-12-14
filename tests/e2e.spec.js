@@ -73,6 +73,32 @@ test.describe('drag-drop and zoom', () => {
     await expect(page.locator('.canvas-layer')).toHaveCount(1, { timeout: 3000 });
   });
 
+  test('GM can delete images without DOM errors', async ({ page }) => {
+    const consoleErrors = [];
+    page.on('pageerror', (error) => {
+      consoleErrors.push(error.message);
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'alpha');
+    await page.fill('input[placeholder="Display name"]', 'GM');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    // Wait for the initial image to load
+    await expect(page.locator('.canvas-layer')).toHaveCount(1);
+
+    // Click the remove button
+    const removeButton = page.locator('.image-remove').first();
+    await removeButton.click();
+
+    // Verify the image is removed
+    await expect(page.locator('.canvas-layer')).toHaveCount(0, { timeout: 3000 });
+
+    // Verify no React DOM errors occurred
+    expect(consoleErrors).toEqual([]);
+  });
+
   test('prevents joining a room with an active GM', async ({ page }) => {
     gmLocked = true;
     await page.goto('/');

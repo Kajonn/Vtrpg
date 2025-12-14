@@ -181,7 +181,7 @@ const Room = ({
             {diceLog.map((entry, index) => (
               <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
                 <div className="log-window__meta">
-                  <span>Slag {index + 1} av {entry.triggeredBy || 'Okänd'}</span>
+                  <span>Slag av {entry.triggeredBy || 'Okänd'}</span>
                   <span className="log-window__seed">Seed: {entry.seed}</span>
                 </div>
                 <div className="log-window__dice">

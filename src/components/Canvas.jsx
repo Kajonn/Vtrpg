@@ -151,8 +151,6 @@ const Canvas = ({
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  // Ensure immediate DOM removal to satisfy tests even if state lags
-                  event.currentTarget.closest('.canvas-layer')?.remove();
                   removedIdsRef.current.add(image.id);
                   setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
                   onRemoveImage?.(image.id);
