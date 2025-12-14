@@ -1,0 +1,7 @@
+
+> vtrpg-client@0.1.0 test:e2e
+> playwright test
+
+
+Running 5 tests using 1 worker
+

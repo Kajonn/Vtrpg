@@ -8,7 +8,7 @@ const fetchImages = async (roomId) => {
   return response.json();
 };
 
-const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout }) => {
+const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout, diceRoll, onSendDiceRoll }) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
@@ -144,6 +144,8 @@ const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout }) 
         onShareUrl={handleShareUrl}
         onMoveImage={handleMoveImage}
         onRemoveImage={handleRemoveImage}
+        diceRoll={diceRoll}
+        onSendDiceRoll={onSendDiceRoll}
       />
 
       <footer className="participant-panel">
@@ -189,6 +191,8 @@ Room.propTypes = {
   })).isRequired,
   onImagesUpdate: PropTypes.func.isRequired,
   onLogout: PropTypes.func.isRequired,
+  diceRoll: PropTypes.object,
+  onSendDiceRoll: PropTypes.func,
 };
 
 export default Room;

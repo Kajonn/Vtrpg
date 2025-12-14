@@ -628,7 +628,7 @@ func (s *Server) unregisterWS(roomID string, profile clientProfile, conn *wsConn
 
 func (s *Server) readLoop(roomID string, client *wsConn) {
 	for {
-		opcode, _, err := readFrame(client.conn)
+		opcode, payload, err := readFrame(client.conn)
 		if err != nil {
 			return
 		}
@@ -638,6 +638,8 @@ func (s *Server) readLoop(roomID string, client *wsConn) {
 			return
 		case 0x9: // ping
 			_ = client.write(0xA, []byte{})
+		case 0x1: // text frame
+			s.handleWSMessage(roomID, payload)
 		}
 	}
 }
@@ -711,6 +713,40 @@ func (s *Server) broadcastRoster(roomID string) {
 			s.logger.Error("broadcast roster", slog.String("error", err.Error()))
 		}
 	}
+}
+
+func (s *Server) handleWSMessage(roomID string, data []byte) {
+	var msg struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		s.logger.Error("unmarshal ws message", slog.String("error", err.Error()))
+		return
+	}
+
+	switch msg.Type {
+	case "DiceRoll":
+		var dicePayload DiceRollPayload
+		if err := json.Unmarshal(msg.Payload, &dicePayload); err != nil {
+			s.logger.Error("unmarshal dice roll", slog.String("error", err.Error()))
+			return
+		}
+		s.broadcastDiceRoll(roomID, dicePayload)
+	}
+}
+
+func (s *Server) broadcastDiceRoll(roomID string, diceRoll DiceRollPayload) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "DiceRoll",
+		"payload": diceRoll,
+	})
+	if err != nil {
+		s.logger.Error("marshal dice roll", slog.String("error", err.Error()))
+		return
+	}
+	s.logger.Info("broadcast dice roll", slog.String("room", roomID), slog.Uint64("seed", uint64(diceRoll.Seed)), slog.Int("count", diceRoll.Count))
+	s.broadcast(roomID, payload)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

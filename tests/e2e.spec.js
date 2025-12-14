@@ -113,4 +113,64 @@ test.describe('drag-drop and zoom', () => {
     await expect(status).toHaveAttribute('data-state', /rolling|settled/);
     await expect(page.getByLabel('dice-canvas')).toBeVisible();
   });
+
+  test('dice rolls are synchronized between users', async ({ browser }) => {
+    // Create two separate browser contexts to simulate two users
+    const context1 = await browser.newContext();
+    const context2 = await browser.newContext();
+    
+    const page1 = await context1.newPage();
+    const page2 = await context2.newPage();
+
+    // Setup route mocking for both pages
+    for (const page of [page1, page2]) {
+      await page.route('**/rooms/**', (route, request) => {
+        const method = request.method();
+        if (method === 'GET' && request.url().includes('/images')) {
+          return route.fulfill({ status: 200, body: JSON.stringify([]) });
+        }
+        return route.fallback();
+      });
+    }
+
+    // User 1 (GM) joins room 'dice-test'
+    await page1.goto('/');
+    await page1.fill('input[placeholder="Room"]', 'dice-test');
+    await page1.fill('input[placeholder="Display name"]', 'Player1');
+    await page1.selectOption('select', 'gm');
+    await page1.click('button:has-text("Enter")');
+    await page1.waitForSelector('.dice-overlay');
+
+    // User 2 (Player) joins same room 'dice-test'
+    await page2.goto('/');
+    await page2.fill('input[placeholder="Room"]', 'dice-test');
+    await page2.fill('input[placeholder="Display name"]', 'Player2');
+    await page2.selectOption('select', 'player');
+    await page2.click('button:has-text("Enter")');
+    await page2.waitForSelector('.dice-overlay');
+
+    // Verify both users see the dice overlay
+    await expect(page1.getByLabel('dice-overlay')).toBeVisible();
+    await expect(page2.getByLabel('dice-overlay')).toBeVisible();
+
+    // User 1 triggers a dice roll
+    const rollButton1 = page1.getByRole('button', { name: /roll dice/i });
+    await rollButton1.click();
+
+    // Verify User 1's dice status changes to rolling
+    const status1 = page1.locator('.dice-status');
+    await expect(status1).toHaveAttribute('data-state', 'rolling', { timeout: 2000 });
+
+    // Verify User 2 also sees the dice rolling (synchronized)
+    const status2 = page2.locator('.dice-status');
+    await expect(status2).toHaveAttribute('data-state', 'rolling', { timeout: 2000 });
+
+    // Wait for both to settle
+    await expect(status1).toHaveAttribute('data-state', 'settled', { timeout: 5000 });
+    await expect(status2).toHaveAttribute('data-state', 'settled', { timeout: 5000 });
+
+    // Cleanup
+    await context1.close();
+    await context2.close();
+  });
 });

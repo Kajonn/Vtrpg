@@ -4,15 +4,23 @@ import Room from './components/Room.jsx';
 import './App.css';
 
 const useWebSocket = (roomId, user, onMessage, onError) => {
+  const [socket, setSocket] = useState(null);
+  
   useEffect(() => {
-    if (!roomId || !user?.role || !user?.name) return undefined;
+    if (!roomId || !user?.role || !user?.name) {
+      setSocket(null);
+      return undefined;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const params = new URLSearchParams();
     params.set('role', user.role);
     params.set('name', user.name);
     const query = params.toString();
-    const socket = new WebSocket(`${protocol}://${window.location.host}/ws/rooms/${roomId}?${query}`);
-    socket.addEventListener('message', (event) => {
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/rooms/${roomId}?${query}`);
+    ws.addEventListener('open', () => {
+      setSocket(ws);
+    });
+    ws.addEventListener('message', (event) => {
       try {
         const parsed = JSON.parse(event.data);
         onMessage(parsed);
@@ -20,16 +28,22 @@ const useWebSocket = (roomId, user, onMessage, onError) => {
         console.error('Failed to parse message', error);
       }
     });
-    socket.addEventListener('error', () => {
+    ws.addEventListener('error', () => {
       onError?.('Kunde inte ansluta till liveuppdateringar.');
     });
-    socket.addEventListener('close', (event) => {
+    ws.addEventListener('close', (event) => {
+      setSocket(null);
       if (event.code === 1006 || event.code === 1008) {
         onError?.('Anslutningen till rummet stängdes.');
       }
     });
-    return () => socket.close();
+    return () => {
+      ws.close();
+      setSocket(null);
+    };
   }, [roomId, user?.role, user?.name, onMessage, onError]);
+  
+  return socket;
 };
 
 const App = () => {
@@ -38,6 +52,7 @@ const App = () => {
   const [sharedImages, setSharedImages] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [connectionError, setConnectionError] = useState('');
+  const [diceRoll, setDiceRoll] = useState(null);
 
   const handleLogout = useCallback(() => {
     setUser(null);
@@ -83,10 +98,18 @@ const App = () => {
         return 0;
       });
       setParticipants(sorted);
+    } else if (message?.type === 'DiceRoll') {
+      setDiceRoll(message.payload);
     }
   }, []);
 
-  useWebSocket(roomId, user, handleMessage, setConnectionError);
+  const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
+
+  const sendDiceRoll = useCallback((seed, count) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const message = JSON.stringify({ type: 'DiceRoll', payload: { seed, count } });
+    socket.send(message);
+  }, [socket]);
 
   const sortedImages = useMemo(
     () => [...sharedImages].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
@@ -122,6 +145,8 @@ const App = () => {
           participants={participants}
           onLogout={handleLogout}
           onImagesUpdate={setSharedImages}
+          diceRoll={diceRoll}
+          onSendDiceRoll={sendDiceRoll}
         />
       )}
     </div>

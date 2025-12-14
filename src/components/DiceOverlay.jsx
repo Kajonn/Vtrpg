@@ -19,14 +19,14 @@ const mulberry32 = (seed) => {
 
 const createDieMesh = () => {
   const geometry = new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE);
-  const material = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.2, roughness: 0.6 });
+  const material = new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.2, roughness: 0.6 });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 };
 
-const DiceOverlay = ({ roomId }) => {
+const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
@@ -35,7 +35,6 @@ const DiceOverlay = ({ roomId }) => {
   const diceRef = useRef([]);
   const stepRef = useRef(0);
   const animationRef = useRef(null);
-  const channelRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
   const [status, setStatus] = useState('idle');
 
@@ -66,12 +65,12 @@ const DiceOverlay = ({ roomId }) => {
     scene.background = null;
 
     const camera = new THREE.PerspectiveCamera(45, ARENA_WIDTH / ARENA_HEIGHT, 1, 1000);
-    camera.position.set(0, -200, 350);
+    camera.position.set(0, 0, 500);
     camera.lookAt(0, 0, 0);
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.85);
     const directional = new THREE.DirectionalLight(0xffffff, 0.9);
-    directional.position.set(120, -80, 140);
+    directional.position.set(120, -80, 300);
     directional.castShadow = true;
 
     scene.add(ambient);
@@ -88,39 +87,76 @@ const DiceOverlay = ({ roomId }) => {
 
     const halfWidth = ARENA_WIDTH / 2;
     const halfHeight = ARENA_HEIGHT / 2;
-    const depth = DIE_SIZE * 2;
-    const wallHalf = WALL_THICKNESS / 2;
 
-    const walls = [
-      {
-        translation: { x: halfWidth + wallHalf, y: 0, z: 0 },
-        halfExtents: { x: wallHalf, y: halfHeight + WALL_THICKNESS, z: depth },
-      },
-      {
-        translation: { x: -halfWidth - wallHalf, y: 0, z: 0 },
-        halfExtents: { x: wallHalf, y: halfHeight + WALL_THICKNESS, z: depth },
-      },
-      {
-        translation: { x: 0, y: halfHeight + wallHalf, z: 0 },
-        halfExtents: { x: halfWidth + WALL_THICKNESS, y: wallHalf, z: depth },
-      },
-      {
-        translation: { x: 0, y: -halfHeight - wallHalf, z: 0 },
-        halfExtents: { x: halfWidth + WALL_THICKNESS, y: wallHalf, z: depth },
-      },
-    ];
+    // Use large cuboid colliders instead of halfspace for more reliable collision
+    const floorDepth = WALL_THICKNESS;
+    const wallDepth = DIE_SIZE * 4;
 
-    walls.forEach(({ translation, halfExtents }) => {
-      const rigidBody = world.createRigidBody(
-        RAPIER.RigidBodyDesc.fixed().setTranslation(translation.x, translation.y, translation.z)
-      );
-      world.createCollider(
-        RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
-          .setRestitution(0.6)
-          .setFriction(0.5),
-        rigidBody
-      );
-    });
+    // Floor
+    const floor = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, -DIE_SIZE - floorDepth / 2)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
+        .setRestitution(0.5)
+        .setFriction(0.6),
+      floor
+    );
+
+    // Ceiling
+    const ceiling = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, DIE_SIZE * 3 + floorDepth / 2)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
+        .setRestitution(0.3)
+        .setFriction(0.5),
+      ceiling
+    );
+
+    // Right wall
+    const rightWall = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(halfWidth + WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
+        .setRestitution(0.6)
+        .setFriction(0.5),
+      rightWall
+    );
+
+    // Left wall
+    const leftWall = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(-halfWidth - WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
+        .setRestitution(0.6)
+        .setFriction(0.5),
+      leftWall
+    );
+
+    // Top wall
+    const topWall = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, halfHeight + WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
+        .setRestitution(0.6)
+        .setFriction(0.5),
+      topWall
+    );
+
+    // Bottom wall
+    const bottomWall = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -halfHeight - WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
+        .setRestitution(0.6)
+        .setFriction(0.5),
+      bottomWall
+    );
   };
 
   const initializePhysics = async () => {
@@ -128,7 +164,7 @@ const DiceOverlay = ({ roomId }) => {
     const RAPIER = await import('@dimforge/rapier3d-compat');
     await RAPIER.init();
     rapierRef.current = RAPIER;
-    worldRef.current = new RAPIER.World({ x: 0, y: 0, z: 0 });
+    worldRef.current = new RAPIER.World({ x: 0, y: 0, z: -600 });
     buildBounds();
   };
 
@@ -174,7 +210,7 @@ const DiceOverlay = ({ roomId }) => {
 
     const preparedDice = dice.map((die) => {
       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-        .setTranslation(die.position.x, die.position.y, 0)
+        .setTranslation(die.position.x, die.position.y, DIE_SIZE * 2)
         .setRotation({ w: die.rotation.w, x: die.rotation.x, y: die.rotation.y, z: die.rotation.z })
         .setLinearDamping(0.48)
         .setAngularDamping(0.72)
@@ -267,26 +303,14 @@ const DiceOverlay = ({ roomId }) => {
   }, []);
 
   useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return undefined;
-    const channel = new BroadcastChannel(channelName);
-    channelRef.current = channel;
-    const handler = (event) => {
-      const { type, payload } = event.data || {};
-      if (type === 'dice-roll' && payload?.seed && payload?.count) {
-        startSimulation(payload.seed, payload.count);
-      }
-    };
-    channel.addEventListener('message', handler);
-
-    return () => {
-      channel.removeEventListener('message', handler);
-      channel.close();
-    };
+    if (!diceRoll || !diceRoll.seed || !diceRoll.count) return;
+    startSimulation(diceRoll.seed, diceRoll.count);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [channelName]);
+  }, [diceRoll]);
 
   const broadcastRoll = (seed, count) => {
-    channelRef.current?.postMessage({ type: 'dice-roll', payload: { seed, count } });
+    if (!onSendDiceRoll) return;
+    onSendDiceRoll(seed, count);
   };
 
   const rollDice = () => {
@@ -325,6 +349,8 @@ const DiceOverlay = ({ roomId }) => {
 
 DiceOverlay.propTypes = {
   roomId: PropTypes.string,
+  diceRoll: PropTypes.object,
+  onSendDiceRoll: PropTypes.func,
 };
 
 export default DiceOverlay;

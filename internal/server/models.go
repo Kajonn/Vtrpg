@@ -44,3 +44,9 @@ type SharedImage struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	Position    Position  `json:"position"`
 }
+
+// DiceRollPayload represents a dice roll synchronization message.
+type DiceRollPayload struct {
+	Seed  uint32 `json:"seed"`
+	Count int    `json:"count"`
+}

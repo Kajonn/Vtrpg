@@ -4,7 +4,7 @@ import DiceOverlay from './DiceOverlay.jsx';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage, roomId }) => {
+const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage, roomId, diceRoll, onSendDiceRoll }) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -178,7 +178,7 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
       onPaste={handlePaste}
       style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
-      <DiceOverlay roomId={roomId} />
+      <DiceOverlay roomId={roomId} diceRoll={diceRoll} onSendDiceRoll={onSendDiceRoll} />
       <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
@@ -201,6 +201,8 @@ Canvas.propTypes = {
   onMoveImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
   roomId: PropTypes.string,
+  diceRoll: PropTypes.object,
+  onSendDiceRoll: PropTypes.func,
 };
 
 export default Canvas;
