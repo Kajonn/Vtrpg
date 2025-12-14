@@ -47,14 +47,17 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const animationRef = useRef(null);
   const rollStartedAtRef = useRef(null);
   const settleTimeoutRef = useRef(null);
+  const clearTimeoutRef = useRef(null);
   const currentRollRef = useRef(null);
   const reportedRollRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
+  const [velocity, setVelocity] = useState(1.0);
   const [status, setStatus] = useState('idle');
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     const world = worldRef.current;
     diceRef.current.forEach((die) => {
       const body = world?.getRigidBody(die.bodyHandle);
@@ -63,6 +66,8 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     });
     diceRef.current = [];
     stepRef.current = 0;
+    // Render one final frame to clear the canvas
+    renderFrame();
   };
 
   const setupScene = () => {
@@ -77,8 +82,8 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     const scene = new THREE.Scene();
     scene.background = null;
 
-    const camera = new THREE.PerspectiveCamera(45, ARENA_WIDTH / ARENA_HEIGHT, 1, 1000);
-    camera.position.set(0, 0, 500);
+    const camera = new THREE.PerspectiveCamera(35, ARENA_WIDTH / ARENA_HEIGHT, 1, 1000);
+    camera.position.set(0, 0, 700);
     camera.lookAt(0, 0, 0);
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.85);
@@ -232,7 +237,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     onDiceResult({ ...roll, results });
   };
 
-  const seedDice = (seed, count) => {
+  const seedDice = (seed, count, velocityMultiplier = 1.0) => {
     const world = worldRef.current;
     const RAPIER = rapierRef.current;
     const scene = sceneRef.current;
@@ -250,14 +255,14 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
         },
         velocity: {
-          x: randomInRange(rng, -240, 240),
-          y: randomInRange(rng, 180, 320),
-          z: 0,
+          x: randomInRange(rng, -480, 480) * velocityMultiplier,
+          y: randomInRange(rng, 360, 640) * velocityMultiplier,
+          z: randomInRange(rng, -50, 50) * velocityMultiplier,
         },
         angularVelocity: {
-          x: randomInRange(rng, -4, 4),
-          y: randomInRange(rng, -4, 4),
-          z: randomInRange(rng, -4, 4),
+          x: randomInRange(rng, -4, 4) * velocityMultiplier,
+          y: randomInRange(rng, -4, 4) * velocityMultiplier,
+          z: randomInRange(rng, -4, 4) * velocityMultiplier,
         },
         rotation,
       };
@@ -353,12 +358,13 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
   const startSimulation = async ({ seed, count, triggeredBy }) => {
     await initializePhysics();
-    seedDice(seed, count);
+    seedDice(seed, count, velocity);
     setStatus('rolling');
     rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
     currentRollRef.current = { seed, count, triggeredBy };
     reportedRollRef.current = null;
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     settleTimeoutRef.current = setTimeout(() => {
       reportResults();
       setStatus('settled');
@@ -386,6 +392,22 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     startSimulation(diceRoll);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diceRoll]);
+
+  useEffect(() => {
+    if (status === 'settled') {
+      if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
+      clearTimeoutRef.current = setTimeout(() => {
+        teardown();
+        setStatus('idle');
+        currentRollRef.current = null;
+        reportedRollRef.current = null;
+      }, 3000);
+    }
+    return () => {
+      if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   const broadcastRoll = (seed, count, triggeredBy) => {
     if (!onSendDiceRoll) return;
@@ -415,6 +437,19 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
           <button type="button" onClick={() => setDiceCount((prev) => Math.min(12, prev + 1))} aria-label="increase dice">
             +
           </button>
+        </div>
+        <div className="velocity-control">
+          <label htmlFor="velocity-slider">Force: {velocity.toFixed(1)}x</label>
+          <input
+            id="velocity-slider"
+            type="range"
+            min="0.3"
+            max="2.0"
+            step="0.1"
+            value={velocity}
+            onChange={(e) => setVelocity(parseFloat(e.target.value))}
+            aria-label="dice throw force"
+          />
         </div>
         <button type="button" className="roll-button" onClick={rollDice} aria-label="roll dice">
           Roll dice
