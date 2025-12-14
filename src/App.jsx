@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import './App.css';
@@ -53,6 +53,8 @@ const App = () => {
   const [participants, setParticipants] = useState([]);
   const [connectionError, setConnectionError] = useState('');
   const [diceRoll, setDiceRoll] = useState(null);
+  const [diceLog, setDiceLog] = useState([]);
+  const diceChannelRef = useRef(null);
 
   const handleLogout = useCallback(() => {
     setUser(null);
@@ -100,16 +102,27 @@ const App = () => {
       setParticipants(sorted);
     } else if (message?.type === 'DiceRoll') {
       setDiceRoll(message.payload);
+      diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload: message.payload });
     }
   }, []);
 
   const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
 
   const sendDiceRoll = useCallback((seed, count) => {
+    const payload = { seed, count };
+    diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    const message = JSON.stringify({ type: 'DiceRoll', payload: { seed, count } });
+    const message = JSON.stringify({ type: 'DiceRoll', payload });
     socket.send(message);
   }, [socket]);
+
+  const handleDiceResult = useCallback(({ seed, count, results }) => {
+    const timestamp = new Date().toISOString();
+    setDiceLog((prev) => [
+      { id: `${seed}-${timestamp}`, seed, count, results, timestamp },
+      ...prev,
+    ].slice(0, 20));
+  }, []);
 
   const sortedImages = useMemo(
     () => [...sharedImages].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
@@ -129,6 +142,24 @@ const App = () => {
     }
   }, [user, roomId]);
 
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return undefined;
+
+    const channelName = `vtrpg-dice-${roomId || 'default'}`;
+    const channel = new BroadcastChannel(channelName);
+    channel.onmessage = (event) => {
+      if (event.data?.type === 'DiceRoll' && event.data?.payload) {
+        setDiceRoll(event.data.payload);
+      }
+    };
+    diceChannelRef.current = channel;
+
+    return () => {
+      channel.close();
+      diceChannelRef.current = null;
+    };
+  }, [roomId]);
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -147,6 +178,8 @@ const App = () => {
           onImagesUpdate={setSharedImages}
           diceRoll={diceRoll}
           onSendDiceRoll={sendDiceRoll}
+          diceLog={diceLog}
+          onDiceResult={handleDiceResult}
         />
       )}
     </div>

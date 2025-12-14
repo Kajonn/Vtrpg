@@ -8,7 +8,18 @@ const fetchImages = async (roomId) => {
   return response.json();
 };
 
-const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout, diceRoll, onSendDiceRoll }) => {
+const Room = ({
+  roomId,
+  user,
+  images,
+  participants,
+  onImagesUpdate,
+  onLogout,
+  diceRoll,
+  onSendDiceRoll,
+  diceLog,
+  onDiceResult,
+}) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
@@ -146,7 +157,36 @@ const Room = ({ roomId, user, images, participants, onImagesUpdate, onLogout, di
         onRemoveImage={handleRemoveImage}
         diceRoll={diceRoll}
         onSendDiceRoll={onSendDiceRoll}
+        onDiceResult={onDiceResult}
       />
+
+      <section className="log-window" aria-label="dice-log">
+        <div className="log-window__header">
+          <h3>Tärningslogg</h3>
+          <span className="log-window__hint">Senaste slaget visas först</span>
+        </div>
+        {diceLog?.length ? (
+          <ol className="log-window__list">
+            {diceLog.map((entry, index) => (
+              <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
+                <div className="log-window__meta">
+                  <span>Slag {index + 1}</span>
+                  <span className="log-window__seed">Seed: {entry.seed}</span>
+                </div>
+                <div className="log-window__dice">
+                  {entry.results.map((result, dieIndex) => (
+                    <span key={`${entry.id}-${dieIndex}`} className="log-window__die">
+                      Tärning {dieIndex + 1}: {result}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="log-window__empty">Inga tärningsresultat ännu.</p>
+        )}
+      </section>
 
       <footer className="participant-panel">
         <div className="participant-panel__header">
@@ -193,6 +233,15 @@ Room.propTypes = {
   onLogout: PropTypes.func.isRequired,
   diceRoll: PropTypes.object,
   onSendDiceRoll: PropTypes.func,
+  diceLog: PropTypes.arrayOf(
+    PropTypes.shape({
+      id: PropTypes.string,
+      seed: PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+      count: PropTypes.number,
+      results: PropTypes.arrayOf(PropTypes.number),
+    })
+  ),
+  onDiceResult: PropTypes.func,
 };
 
 export default Room;
