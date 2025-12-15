@@ -14,22 +14,22 @@ const DICE_TYPES = [4, 6, 8, 10, 12, 20];
 
 // Individual scale factors for each die type
 const DIE_SCALES = {
-  4: 48,   // d4 
-  6: 48,   // d6 
-  8: 56,   // d8 - medium-small
-  10: 56,  // d10 - medium-small
-  12: 64,  // d12 - medium
-  20: 92,  // d20 - medium
+  4: 90,   // d4 
+  6: 56,   // d6 
+  8: 90,   // d8 - medium-small
+  10: 90,  // d10 - medium-small
+  12: 90,  // d12 - medium
+  20: 95,  // d20 - medium
 };
 
 // Individual density (mass) factors for each die type
 const DIE_DENSITIES = {
-  4: 2.0,   // d4 - standard
-  6: 2.2,   // d6 - slightly heavier
-  8: 2.1,   // d8 - slightly heavier
-  10: 2.2,  // d10 - slightly heavier
-  12: 2.3,  // d12 - heavier
-  20: 2.5,  // d20 - heaviest
+  4: 4,   // d4 - standard
+  6: 6,   // d6 - slightly heavier
+  8: 8,   // d8 - slightly heavier
+  10: 8,  // d10 - slightly heavier
+  12: 9,  // d12 - heavier
+  20: 10,  // d20 - heaviest
 };
 
 const DIE_MODEL_PATHS = {
@@ -68,7 +68,7 @@ const extractVertices = (geometry) => {
     const x = position.getX(i);
     const y = position.getY(i);
     const z = position.getZ(i);
-    const key = `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`;
+    const key = `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(x, y, z);
@@ -76,7 +76,7 @@ const extractVertices = (geometry) => {
   return unique;
 };
 
-const createColliderForSides = (RAPIER, sides, geometry) => {
+const createColliderForSides = (RAPIER, sides, vertices) => {
   const dieSize = DIE_SCALES[sides];
   
   if (sides === 6) {
@@ -85,7 +85,6 @@ const createColliderForSides = (RAPIER, sides, geometry) => {
       .setFriction(0.32);
   }
 
-  const vertices = extractVertices(geometry);
   const convex = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
   if (convex) {
     convex.setRestitution(0.55).setFriction(0.32);
@@ -101,13 +100,13 @@ const prepareDieMesh = (entry) => {
   mesh.traverse((node) => {
     if (node.isMesh) {
       node.geometry = entry.geometry;
-      node.material = node.material?.clone?.() || node.material;
+      node.material = node.material; // Share material, don't clone
       node.castShadow = true;
       node.receiveShadow = true;
     }
   });
 
-  return { mesh, geometry: entry.geometry };
+  return { mesh, geometry: entry.geometry, vertices: entry.vertices };
 };
 
 const mulberry32 = (seed) => {
@@ -145,11 +144,17 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     const world = worldRef.current;
-    diceRef.current.forEach((die) => {
-      const body = world?.getRigidBody(die.bodyHandle);
-      if (body) world.removeRigidBody(body);
-      sceneRef.current?.remove(die.mesh);
-    });
+    if (world) {
+      // Remove all dice
+      diceRef.current.forEach((die) => {
+        const body = world.getRigidBody(die.bodyHandle);
+        if (body) world.removeRigidBody(body);
+        sceneRef.current?.remove(die.mesh);
+      });
+      // Clear the world completely for determinism
+      world.free();
+      worldRef.current = null;
+    }
     diceRef.current = [];
     stepRef.current = 0;
   };
@@ -209,18 +214,20 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
 
             // Scale the geometry vertices to match physics size
             geometry.scale(scale, scale, scale);
-            geometry.computeBoundingBox();
+
+            // Cache extracted vertices for physics collider
+            const vertices = extractVertices(geometry);
 
             template.traverse((node) => {
               if (node.isMesh) {
                 node.geometry = geometry;
-                node.material = node.material?.clone?.() || node.material;
+                node.material = node.material; // Share material, don't clone
                 node.castShadow = true;
                 node.receiveShadow = true;
               }
             });
 
-            return [sides, { template, geometry }];
+            return [sides, { template, geometry, vertices }];
           })
         );
 
@@ -254,7 +261,16 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     const scene = new THREE.Scene();
     scene.background = null;
 
-    const camera = new THREE.PerspectiveCamera(45, ARENA_WIDTH / ARENA_HEIGHT, 1, 1000);
+    const aspect = ARENA_WIDTH / ARENA_HEIGHT;
+    const frustumSize = ARENA_HEIGHT;
+    const camera = new THREE.OrthographicCamera(
+      (-frustumSize * aspect) / 2,
+      (frustumSize * aspect) / 2,
+      frustumSize / 2,
+      -frustumSize / 2,
+      1,
+      1000
+    );
     camera.position.set(0, 0, 800);
     camera.lookAt(0, 0, 0);
 
@@ -356,7 +372,17 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     const RAPIER = await import('@dimforge/rapier3d-compat');
     await RAPIER.init();
     rapierRef.current = RAPIER;
-    worldRef.current = new RAPIER.World({ x: 0, y: 0, z: -1200 });
+    
+    const world = new RAPIER.World({ x: 0, y: 0, z: -1200 });
+    
+    // Set integration parameters explicitly for determinism
+    const integrationParameters = world.integrationParameters;
+    integrationParameters.dt = 1 / 60; // Match the timestep used in world.step()
+    integrationParameters.numSolverIterations = 4;
+    integrationParameters.numAdditionalFrictionIterations = 4;
+    integrationParameters.numInternalPgsIterations = 1;
+    
+    worldRef.current = world;
     buildBounds();
   }, []);
 
@@ -369,11 +395,10 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     return quaternion;
   };
 
-  const seedDice = useCallback((seed, count, sides) => {
-    const world = worldRef.current;
+  const seedDice = useCallback(async (seed, count, sides) => {
     const RAPIER = rapierRef.current;
     const scene = sceneRef.current;
-    if (!world || !RAPIER || !scene) return;
+    if (!RAPIER || !scene) return;
 
     const modelEntry = diceModelsRef.current[sides];
     if (!modelEntry) {
@@ -383,12 +408,23 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
 
     const rng = mulberry32(seed);
     teardown();
+    
+    // Recreate world from scratch for determinism
+    const world = new RAPIER.World({ x: 0, y: 0, z: -1200 });
+    const integrationParameters = world.integrationParameters;
+    integrationParameters.dt = 1 / 60;
+    integrationParameters.numSolverIterations = 4;
+    integrationParameters.numAdditionalFrictionIterations = 4;
+    integrationParameters.numInternalPgsIterations = 1;
+    worldRef.current = world;
+    buildBounds();
     const dice = Array.from({ length: count }, () => {
-      const { mesh, geometry } = prepareDieMesh(modelEntry);
+      const { mesh, geometry, vertices } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
       return {
         mesh,
         geometry,
+        vertices,
         position: {
           x: randomInRange(rng, -ARENA_WIDTH / 2 + DIE_SIZE, ARENA_WIDTH / 2 - DIE_SIZE),
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
@@ -419,7 +455,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       body.setLinvel(die.velocity, true);
       body.setAngvel(die.angularVelocity, true);
 
-      const colliderDesc = createColliderForSides(RAPIER, sides, die.geometry);
+      const colliderDesc = createColliderForSides(RAPIER, sides, die.vertices);
       colliderDesc.setDensity(DIE_DENSITIES[sides]);
 
       world.createCollider(colliderDesc, body);
@@ -454,7 +490,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
   const tick = () => {
     const world = worldRef.current;
     if (!world) return;
-    world.step();
+    world.step(null, 1 / 60); // Fixed 60 FPS timestep for deterministic physics
     renderFrame();
     stepRef.current += 1;
 
@@ -496,7 +532,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
       settleTimeoutRef.current = setTimeout(() => setStatus('settled'), 3200);
       await initializePhysics();
-      seedDice(seed, count, sides);
+      await seedDice(seed, count, sides);
       animationRef.current = requestAnimationFrame(tick);
     },
     [initializePhysics, modelsReady, seedDice]
@@ -630,7 +666,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
           <button type="button" onClick={() => setDiceCount((prev) => Math.max(1, prev - 1))} aria-label="decrease dice">
             -
           </button>
-          <button type="button" onClick={() => setDiceCount((prev) => Math.min(12, prev + 1))} aria-label="increase dice">
+          <button type="button" onClick={() => setDiceCount((prev) => Math.min(20, prev + 1))} aria-label="increase dice">
             +
           </button>
         </div>
