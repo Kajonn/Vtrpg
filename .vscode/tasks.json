@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build-frontend",
+      "type": "npm",
+      "script": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "revealProblems": "onProblem"
+      }
+    }
+  ]
+}

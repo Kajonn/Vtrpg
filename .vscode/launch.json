@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch Server",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/server",
+      "env": {
+        "PORT": "8080",
+        "FRONTEND_DIR": "${workspaceFolder}/dist",
+        "UPLOAD_DIR": "${workspaceFolder}/uploads"
+      },
+      "preLaunchTask": "build-frontend"
+    },
+    {
+      "name": "Launch Server (no frontend build)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/server",
+      "env": {
+        "PORT": "8080",
+        "FRONTEND_DIR": "${workspaceFolder}/dist",
+        "UPLOAD_DIR": "${workspaceFolder}/uploads"
+      }
+    }
+  ]
+}

@@ -9,6 +9,16 @@ const ARENA_HEIGHT = 600;
 const DIE_SIZE = 64;
 const MAX_STEPS = 400;
 const WALL_THICKNESS = 12;
+const MIN_ROLL_DURATION = 1000;
+const MAX_ROLL_DURATION = 2500;
+const FACE_NORMALS = [
+  { value: 1, normal: new THREE.Vector3(0, 0, 1) },
+  { value: 6, normal: new THREE.Vector3(0, 0, -1) },
+  { value: 2, normal: new THREE.Vector3(0, 1, 0) },
+  { value: 5, normal: new THREE.Vector3(0, -1, 0) },
+  { value: 3, normal: new THREE.Vector3(1, 0, 0) },
+  { value: 4, normal: new THREE.Vector3(-1, 0, 0) },
+];
 
 const DICE_TYPES = [4, 6, 8, 10, 12, 20];
 
@@ -118,7 +128,7 @@ const mulberry32 = (seed) => {
   };
 };
 
-const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
+const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
@@ -143,6 +153,8 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     const world = worldRef.current;
     if (world) {
       // Remove all dice
@@ -157,6 +169,8 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     }
     diceRef.current = [];
     stepRef.current = 0;
+    // Render one final frame to clear the canvas
+    renderFrame();
   };
 
   useEffect(() => {
@@ -493,6 +507,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     world.step(null, 1 / 60); // Fixed 60 FPS timestep for deterministic physics
     renderFrame();
     stepRef.current += 1;
+    const elapsed = rollStartedAtRef.current
+      ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) - rollStartedAtRef.current
+      : 0;
+    const exceededDuration = elapsed > MAX_ROLL_DURATION;
+    const pastMinimumDuration = elapsed >= MIN_ROLL_DURATION;
 
     const stillMoving = diceRef.current.some((die) => {
       const body = world.getRigidBody(die.bodyHandle);
@@ -508,7 +527,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
       );
     });
 
-    if (stepRef.current < MAX_STEPS && stillMoving) {
+    if ((stepRef.current < MAX_STEPS && stillMoving && !exceededDuration) || (!pastMinimumDuration && !exceededDuration)) {
       animationRef.current = requestAnimationFrame(tick);
     } else {
       if (settleTimeoutRef.current) {
@@ -632,10 +651,10 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelName, handleIncomingRoll]);
 
-  const broadcastRoll = (seed, count, sides) => {
+  const broadcastRoll = (seed, count, sides, triggeredBy) => {
     postLocalRoll(seed, count, sides);
     if (!onSendDiceRoll) return;
-    onSendDiceRoll(seed, count, sides);
+    onSendDiceRoll(seed, count, sides, triggeredBy);
   };
 
   const rollDice = () => {
@@ -643,8 +662,9 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll }) => {
     const seed = hasCrypto
       ? crypto.getRandomValues(new Uint32Array(1))[0]
       : Math.floor(Math.random() * 1_000_000_000) || Date.now();
+    const triggeredBy = userName || 'Okänd';
     setStatus('rolling');
-    broadcastRoll(seed, diceCount, diceSides);
+    broadcastRoll(seed, diceCount, diceSides, triggeredBy);
     startSimulation(seed, diceCount, diceSides);
   };
 
@@ -708,6 +728,8 @@ DiceOverlay.propTypes = {
     sides: PropTypes.number,
   }),
   onSendDiceRoll: PropTypes.func,
+  onDiceResult: PropTypes.func,
+  userName: PropTypes.string,
 };
 
 export default DiceOverlay;

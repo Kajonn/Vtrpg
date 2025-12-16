@@ -280,6 +280,74 @@
   font-weight: 600;
 }
 
+.log-window {
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.log-window__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.log-window__hint {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.log-window__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.log-window__item {
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+  background: #0f172a;
+}
+
+.log-window__meta {
+  display: flex;
+  justify-content: space-between;
+  color: #e2e8f0;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.log-window__seed {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.log-window__dice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  color: #e2e8f0;
+}
+
+.log-window__die {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 0.25rem 0.5rem;
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.log-window__empty {
+  color: #94a3b8;
+  font-style: italic;
+}
+
 .participant-panel {
   background: #0b1220;
   border: 1px solid #1e293b;

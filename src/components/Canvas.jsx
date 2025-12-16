@@ -4,7 +4,19 @@ import DiceOverlay from './DiceOverlay.jsx';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
-const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemoveImage, roomId, diceRoll, onSendDiceRoll }) => {
+const Canvas = ({
+  images,
+  isGM,
+  onUploadFiles,
+  onShareUrl,
+  onMoveImage,
+  onRemoveImage,
+  roomId,
+  diceRoll,
+  onSendDiceRoll,
+  onDiceResult,
+  userName,
+}) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -139,8 +151,6 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  // Ensure immediate DOM removal to satisfy tests even if state lags
-                  event.currentTarget.closest('.canvas-layer')?.remove();
                   removedIdsRef.current.add(image.id);
                   setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
                   onRemoveImage?.(image.id);
@@ -178,7 +188,13 @@ const Canvas = ({ images, isGM, onUploadFiles, onShareUrl, onMoveImage, onRemove
       onPaste={handlePaste}
       style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
-      <DiceOverlay roomId={roomId} diceRoll={diceRoll} onSendDiceRoll={onSendDiceRoll} />
+      <DiceOverlay
+        roomId={roomId}
+        diceRoll={diceRoll}
+        onSendDiceRoll={onSendDiceRoll}
+        onDiceResult={onDiceResult}
+        userName={userName}
+      />
       <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}
@@ -207,6 +223,8 @@ Canvas.propTypes = {
     sides: PropTypes.number,
   }),
   onSendDiceRoll: PropTypes.func,
+  onDiceResult: PropTypes.func,
+  userName: PropTypes.string,
 };
 
 export default Canvas;

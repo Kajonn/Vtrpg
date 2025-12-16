@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import './App.css';
@@ -53,11 +53,14 @@ const App = () => {
   const [participants, setParticipants] = useState([]);
   const [connectionError, setConnectionError] = useState('');
   const [diceRoll, setDiceRoll] = useState(null);
+  const [diceLog, setDiceLog] = useState([]);
+  const diceChannelRef = useRef(null);
 
   const handleLogout = useCallback(() => {
     setUser(null);
     setSharedImages([]);
     setParticipants([]);
+    setDiceLog([]);
     setConnectionError('');
     localStorage.removeItem('vtrpg.session');
   }, []);
@@ -99,17 +102,47 @@ const App = () => {
       });
       setParticipants(sorted);
     } else if (message?.type === 'DiceRoll') {
-      setDiceRoll(message.payload);
+      const payload = {
+        ...message.payload,
+        triggeredBy: message.payload?.triggeredBy || 'Okänd',
+      };
+      setDiceRoll(payload);
+      diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
+    } else if (message?.type === 'DiceLogEntry' && message.payload) {
+      setDiceLog((prev) => [message.payload, ...prev.filter((entry) => entry.id !== message.payload.id)].slice(0, 50));
     }
   }, []);
 
   const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
 
-  const sendDiceRoll = useCallback((seed, count, sides) => {
+  const sendDiceRoll = useCallback((seed, count, sides, triggeredBy) => {
+    const roller = triggeredBy || user?.name || 'Okänd';
+    const payload = { seed, count, sides, triggeredBy: roller };
+    diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    const message = JSON.stringify({ type: 'DiceRoll', payload: { seed, count, sides } });
+    const message = JSON.stringify({ type: 'DiceRoll', payload });
     socket.send(message);
-  }, [socket]);
+  }, [socket, user?.name]);
+
+  const handleDiceResult = useCallback(({ seed, count, results, triggeredBy }) => {
+    const timestamp = new Date().toISOString();
+    const roller = triggeredBy || diceRoll?.triggeredBy || user?.name || 'Okänd';
+    const entry = { id: `${seed}-${timestamp}`, seed, count, results, timestamp, triggeredBy: roller };
+    setDiceLog((prev) => [entry, ...prev.filter((item) => item.id !== entry.id)].slice(0, 50));
+
+    if (roller === user?.name) {
+      fetch(`/rooms/${roomId}/dice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed, count, results, triggeredBy: roller, timestamp }),
+      })
+        .then((response) => response.json())
+        .then((saved) => {
+          setDiceLog((prev) => [saved, ...prev.filter((item) => item.id !== saved.id && item.seed !== saved.seed)].slice(0, 50));
+        })
+        .catch(() => {});
+    }
+  }, [diceRoll, roomId, user?.name]);
 
   const sortedImages = useMemo(
     () => [...sharedImages].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
@@ -119,6 +152,7 @@ const App = () => {
   useEffect(() => {
     setConnectionError('');
     setParticipants([]);
+    setDiceLog([]);
   }, [roomId, user]);
 
   useEffect(() => {
@@ -128,6 +162,28 @@ const App = () => {
       localStorage.removeItem('vtrpg.session');
     }
   }, [user, roomId]);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return undefined;
+
+    const channelName = `vtrpg-dice-${roomId || 'default'}`;
+    const channel = new BroadcastChannel(channelName);
+    channel.onmessage = (event) => {
+      if (event.data?.type === 'DiceRoll' && event.data?.payload) {
+        const payload = {
+          ...event.data.payload,
+          triggeredBy: event.data.payload?.triggeredBy || 'Okänd',
+        };
+        setDiceRoll(payload);
+      }
+    };
+    diceChannelRef.current = channel;
+
+    return () => {
+      channel.close();
+      diceChannelRef.current = null;
+    };
+  }, [roomId]);
 
   return (
     <div className="app-shell">
@@ -145,8 +201,11 @@ const App = () => {
           participants={participants}
           onLogout={handleLogout}
           onImagesUpdate={setSharedImages}
+          onDiceLogUpdate={setDiceLog}
           diceRoll={diceRoll}
           onSendDiceRoll={sendDiceRoll}
+          diceLog={diceLog}
+          onDiceResult={handleDiceResult}
         />
       )}
     </div>

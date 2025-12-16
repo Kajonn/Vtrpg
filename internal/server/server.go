@@ -29,6 +29,7 @@ type Server struct {
 	allowedOrigins  []string
 	allowAllOrigins bool
 	images          map[string][]imageResponse
+	diceLogs        map[string][]diceLogEntry
 	mu              sync.RWMutex
 	wsRooms         map[string]map[*wsConn]clientProfile
 	gmRooms         map[string]*wsConn
@@ -49,6 +50,7 @@ func New(cfg Config) (*Server, error) {
 		mux:            http.NewServeMux(),
 		allowedOrigins: cfg.AllowedOrigins,
 		images:         make(map[string][]imageResponse),
+		diceLogs:       make(map[string][]diceLogEntry),
 		wsRooms:        make(map[string]map[*wsConn]clientProfile),
 		gmRooms:        make(map[string]*wsConn),
 	}
@@ -155,6 +157,15 @@ type imageResponse struct {
 	Y         float64   `json:"y"`
 }
 
+type diceLogEntry struct {
+	ID          string    `json:"id"`
+	Seed        uint32    `json:"seed"`
+	Count       int       `json:"count"`
+	Results     []int     `json:"results"`
+	TriggeredBy string    `json:"triggeredBy"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 type clientProfile struct {
 	Name string `json:"name"`
 	Role string `json:"role"`
@@ -179,6 +190,8 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	case "images":
 		// continue
+	case "dice":
+		// continue
 	default:
 		http.NotFound(w, r)
 		return
@@ -187,10 +200,26 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 {
 		switch r.Method {
 		case http.MethodGet:
-			writeJSON(w, http.StatusOK, s.getImages(roomID))
+			if parts[1] == "dice" {
+				writeJSON(w, http.StatusOK, s.getDiceLogs(roomID))
+				return
+			}
+			if parts[1] == "images" {
+				writeJSON(w, http.StatusOK, s.getImages(roomID))
+				return
+			}
+			http.NotFound(w, r)
 			return
 		case http.MethodPost:
-			s.handleImageCreate(w, r, roomID)
+			if parts[1] == "dice" {
+				s.handleDiceLogCreate(w, r, roomID)
+				return
+			}
+			if parts[1] == "images" {
+				s.handleImageCreate(w, r, roomID)
+				return
+			}
+			http.NotFound(w, r)
 			return
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -345,6 +374,47 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 	writeJSON(w, http.StatusOK, img)
 }
 
+func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roomID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		Seed        uint32     `json:"seed"`
+		Count       int        `json:"count"`
+		Results     []int      `json:"results"`
+		TriggeredBy string     `json:"triggeredBy"`
+		Timestamp   *time.Time `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if payload.Count <= 0 || len(payload.Results) == 0 {
+		http.Error(w, "missing fields", http.StatusBadRequest)
+		return
+	}
+
+	ts := time.Now()
+	if payload.Timestamp != nil {
+		ts = payload.Timestamp.UTC()
+	}
+
+	entry := diceLogEntry{
+		ID:          s.newID(),
+		Seed:        payload.Seed,
+		Count:       payload.Count,
+		Results:     append([]int{}, payload.Results...),
+		TriggeredBy: strings.TrimSpace(payload.TriggeredBy),
+		Timestamp:   ts,
+	}
+
+	stored := s.storeDiceLog(roomID, entry)
+	s.broadcastDiceLog(roomID, stored)
+	writeJSON(w, http.StatusOK, stored)
+}
+
 func (s *Server) getImages(roomID string) []imageResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -355,10 +425,56 @@ func (s *Server) getImages(roomID string) []imageResponse {
 	return append([]imageResponse{}, images...)
 }
 
+func (s *Server) getDiceLogs(roomID string) []diceLogEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	logs := s.diceLogs[roomID]
+	if logs == nil {
+		return []diceLogEntry{}
+	}
+	return append([]diceLogEntry{}, logs...)
+}
+
 func (s *Server) storeImage(roomID string, img imageResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.images[roomID] = append(s.images[roomID], img)
+}
+
+func sameResults(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) storeDiceLog(roomID string, entry diceLogEntry) diceLogEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if entry.TriggeredBy == "" {
+		entry.TriggeredBy = "Okänd"
+	}
+	entry.Timestamp = entry.Timestamp.UTC()
+
+	existing := s.diceLogs[roomID]
+	for _, log := range existing {
+		if log.Seed == entry.Seed && log.Count == entry.Count && sameResults(log.Results, entry.Results) {
+			return log
+		}
+	}
+
+	s.diceLogs[roomID] = append([]diceLogEntry{entry}, existing...)
+	if len(s.diceLogs[roomID]) > 50 {
+		s.diceLogs[roomID] = s.diceLogs[roomID][:50]
+	}
+
+	return entry
 }
 
 func (s *Server) nextPosition(roomID string) (float64, float64) {
@@ -639,7 +755,7 @@ func (s *Server) readLoop(roomID string, client *wsConn) {
 		case 0x9: // ping
 			_ = client.write(0xA, []byte{})
 		case 0x1: // text frame
-			s.handleWSMessage(roomID, payload)
+			s.handleWSMessage(roomID, client, payload)
 		}
 	}
 }
@@ -715,7 +831,7 @@ func (s *Server) broadcastRoster(roomID string) {
 	}
 }
 
-func (s *Server) handleWSMessage(roomID string, data []byte) {
+func (s *Server) handleWSMessage(roomID string, sender *wsConn, data []byte) {
 	var msg struct {
 		Type    string          `json:"type"`
 		Payload json.RawMessage `json:"payload"`
@@ -731,6 +847,12 @@ func (s *Server) handleWSMessage(roomID string, data []byte) {
 		if err := json.Unmarshal(msg.Payload, &dicePayload); err != nil {
 			s.logger.Error("unmarshal dice roll", slog.String("error", err.Error()))
 			return
+		}
+		if sender != nil {
+			dicePayload.TriggeredBy = sender.profile.Name
+		}
+		if dicePayload.TriggeredBy == "" {
+			dicePayload.TriggeredBy = "Okänd"
 		}
 		s.broadcastDiceRoll(roomID, dicePayload)
 	}
@@ -751,7 +873,20 @@ func (s *Server) broadcastDiceRoll(roomID string, diceRoll DiceRollPayload) {
 		slog.Uint64("seed", uint64(diceRoll.Seed)),
 		slog.Int("count", diceRoll.Count),
 		slog.Int("sides", diceRoll.Sides),
+		slog.String("triggeredBy", diceRoll.TriggeredBy),
 	)
+	s.broadcast(roomID, payload)
+}
+
+func (s *Server) broadcastDiceLog(roomID string, entry diceLogEntry) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "DiceLogEntry",
+		"payload": entry,
+	})
+	if err != nil {
+		s.logger.Error("marshal dice log", slog.String("error", err.Error()))
+		return
+	}
 	s.broadcast(roomID, payload)
 }
 
