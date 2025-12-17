@@ -124,9 +124,12 @@ const App = () => {
     socket.send(message);
   }, [socket, user?.name]);
 
-  const handleDiceResult = useCallback(({ seed, count, results, triggeredBy }) => {
+  const handleDiceResult = useCallback((results) => {
+    if (!diceRoll) return;
+
+    const { seed, count, triggeredBy } = diceRoll;
     const timestamp = new Date().toISOString();
-    const roller = triggeredBy || diceRoll?.triggeredBy || user?.name || 'Okänd';
+    const roller = triggeredBy || user?.name || 'Okänd';
     const entry = { id: `${seed}-${timestamp}`, seed, count, results, timestamp, triggeredBy: roller };
     setDiceLog((prev) => [entry, ...prev.filter((item) => item.id !== entry.id)].slice(0, 50));
 

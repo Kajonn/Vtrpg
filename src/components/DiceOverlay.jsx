@@ -143,6 +143,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const diceModelsRef = useRef({});
   const animationRef = useRef(null);
   const pendingRollRef = useRef(null);
+  const rollStartedAtRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
   const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
@@ -151,10 +152,42 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const roomKey = useMemo(() => roomId || 'default', [roomId]);
   const channelName = useMemo(() => `vtrpg-dice-${roomKey}`, [roomKey]);
 
+  useEffect(() => {
+    if (status !== 'settled' || !onDiceResult) return;
+
+    const world = worldRef.current;
+    if (!world) return;
+
+    const results = diceRef.current.map((die) => {
+      const body = world.getRigidBody(die.bodyHandle);
+      if (!body) return 0;
+
+      const rotation = body.rotation();
+      const quaternion = new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+
+      // Find the face normal that is most aligned with the Z-axis (up)
+      let maxDot = -Infinity;
+      let topValue = 0;
+
+      FACE_NORMALS.forEach(({ value, normal }) => {
+        const worldNormal = normal.clone().applyQuaternion(quaternion);
+        const dot = worldNormal.dot(new THREE.Vector3(0, 0, 1));
+        if (dot > maxDot) {
+          maxDot = dot;
+          topValue = value;
+        }
+      });
+      return topValue;
+    });
+
+    if (results.length > 0) {
+      onDiceResult(results);
+    }
+  }, [status, onDiceResult]);
+
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
-    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     const world = worldRef.current;
     if (world) {
       // Remove all dice
@@ -552,6 +585,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       settleTimeoutRef.current = setTimeout(() => setStatus('settled'), 3200);
       await initializePhysics();
       await seedDice(seed, count, sides);
+      rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
       animationRef.current = requestAnimationFrame(tick);
     },
     [initializePhysics, modelsReady, seedDice]
