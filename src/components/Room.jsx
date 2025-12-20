@@ -132,21 +132,6 @@ const Room = ({
 
   return (
     <section className="room">
-      <header className="room-header">
-        <div>
-          <h2>Room: {roomId}</h2>
-          <p>
-            Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
-          </p>
-        </div>
-        <button type="button" className="ghost-button" onClick={onLogout}>
-          Logga ut
-        </button>
-      </header>
-
-      {error && <p className="error">{error}</p>}
-      {loading && <p>Laddar bilder...</p>}
-
       {uploading.length > 0 && (
         <ul className="upload-list">
           {uploading.map((item) => (
@@ -157,21 +142,22 @@ const Room = ({
         </ul>
       )}
 
-      <Canvas
-        images={images}
-        isGM={isGM}
-        roomId={roomId}
-        onUploadFiles={handleUpload}
-        onShareUrl={handleShareUrl}
-        onMoveImage={handleMoveImage}
-        onRemoveImage={handleRemoveImage}
-        diceRoll={diceRoll}
-        onSendDiceRoll={onSendDiceRoll}
-        onDiceResult={onDiceResult}
-        userName={user.name}
-      />
+      <div className="room-main">
+        <Canvas
+          images={images}
+          isGM={isGM}
+          roomId={roomId}
+          onUploadFiles={handleUpload}
+          onShareUrl={handleShareUrl}
+          onMoveImage={handleMoveImage}
+          onRemoveImage={handleRemoveImage}
+          diceRoll={diceRoll}
+          onSendDiceRoll={onSendDiceRoll}
+          onDiceResult={onDiceResult}
+          userName={user.name}
+        />
 
-      <section className="log-window" aria-label="dice-log">
+        <section className="log-window" aria-label="dice-log">
         <div className="log-window__header">
           <h3>Tärningslogg</h3>
           <span className="log-window__hint">Senaste slaget visas först</span>
@@ -198,6 +184,7 @@ const Room = ({
           <p className="log-window__empty">Inga tärningsresultat ännu.</p>
         )}
       </section>
+    </div>
 
       <footer className="participant-panel">
         <div className="participant-panel__header">
@@ -217,6 +204,17 @@ const Room = ({
           {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
         </ul>
       </footer>
+
+      <div className="room-footer">
+        <div>
+          <strong>Room: {roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
+        </div>
+        <button type="button" className="ghost-button" onClick={onLogout}>
+          Logga ut
+        </button>
+        {error && <p className="error" style={{ margin: '0.5rem 0 0' }}>{error}</p>}
+        {loading && <p style={{ margin: '0.5rem 0 0' }}>Laddar bilder...</p>}
+      </div>
     </section>
   );
 };

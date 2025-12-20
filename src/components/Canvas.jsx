@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import DiceOverlay from './DiceOverlay.jsx';
+import DiceDebug from './DiceDebug.jsx';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -28,6 +29,7 @@ const Canvas = ({
   const dragOffset = useRef({ x: 0, y: 0 });
   const livePosition = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0, startX: 0, startY: 0 });
+  const [diceDebugMode, setDiceDebugMode] = useState(false);
 
   useEffect(() => {
     const nextImages = images.filter((img) => !removedIdsRef.current.has(img.id));
@@ -188,13 +190,41 @@ const Canvas = ({
       onPaste={handlePaste}
       style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
-      <DiceOverlay
-        roomId={roomId}
-        diceRoll={diceRoll}
-        onSendDiceRoll={onSendDiceRoll}
-        onDiceResult={onDiceResult}
-        userName={userName}
-      />
+      <div 
+        className="dice-debug-toggle" 
+        style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 1000, pointerEvents: 'auto' }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <label style={{ 
+          background: 'rgba(0, 0, 0, 0.7)', 
+          color: 'white', 
+          padding: '8px 12px', 
+          borderRadius: '4px',
+          cursor: 'pointer',
+          display: 'inline-block',
+          userSelect: 'none'
+        }}>
+          <input
+            type="checkbox"
+            checked={diceDebugMode}
+            onChange={(e) => setDiceDebugMode(e.target.checked)}
+            style={{ cursor: 'pointer', marginRight: '6px' }}
+          />
+          Debug Dice Normals
+        </label>
+      </div>
+      {diceDebugMode ? (
+        <DiceDebug />
+      ) : (
+        <DiceOverlay
+          roomId={roomId}
+          diceRoll={diceRoll}
+          onSendDiceRoll={onSendDiceRoll}
+          onDiceResult={onDiceResult}
+          userName={userName}
+        />
+      )}
       <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
         {!images.length && isGM && <p className="canvas-hint">Drop images or URLs directly onto the board</p>}
         {gallery}

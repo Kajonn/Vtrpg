@@ -191,7 +191,7 @@ const App = () => {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Virtual TTRPG Board</h1>
+        <h3>Virtual TTRPG Board</h3>
       </header>
       {connectionError && <p className="error">{connectionError}</p>}
       {!user ? (

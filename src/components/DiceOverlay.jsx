@@ -1,132 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import * as THREE from 'three';
-import { OBJLoader } from 'three/examples/jsm/Addons.js';
-import { MTLLoader } from 'three/examples/jsm/Addons.js';
-
-const ARENA_WIDTH = 1024;
-const ARENA_HEIGHT = 600;
-const DIE_SIZE = 64;
-const MAX_STEPS = 400;
-const WALL_THICKNESS = 12;
-const MIN_ROLL_DURATION = 1000;
-const MAX_ROLL_DURATION = 2500;
-const FACE_NORMALS = [
-  { value: 1, normal: new THREE.Vector3(0, 0, 1) },
-  { value: 6, normal: new THREE.Vector3(0, 0, -1) },
-  { value: 2, normal: new THREE.Vector3(0, 1, 0) },
-  { value: 5, normal: new THREE.Vector3(0, -1, 0) },
-  { value: 3, normal: new THREE.Vector3(1, 0, 0) },
-  { value: 4, normal: new THREE.Vector3(-1, 0, 0) },
-];
-
-const DICE_TYPES = [4, 6, 8, 10, 12, 20];
-
-// Individual scale factors for each die type
-const DIE_SCALES = {
-  4: 90,   // d4 
-  6: 56,   // d6 
-  8: 90,   // d8 - medium-small
-  10: 90,  // d10 - medium-small
-  12: 90,  // d12 - medium
-  20: 95,  // d20 - medium
-};
-
-// Individual density (mass) factors for each die type
-const DIE_DENSITIES = {
-  4: 4,   // d4 - standard
-  6: 6,   // d6 - slightly heavier
-  8: 8,   // d8 - slightly heavier
-  10: 8,  // d10 - slightly heavier
-  12: 9,  // d12 - heavier
-  20: 10,  // d20 - heaviest
-};
-
-const DIE_MODEL_PATHS = {
-  4: {
-    obj: new URL('../assets/dice/4Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/4Dice.mtl', import.meta.url).href,
-  },
-  6: {
-    obj: new URL('../assets/dice/6Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/6Dice.mtl', import.meta.url).href,
-  },
-  8: {
-    obj: new URL('../assets/dice/8Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/8Dice.mtl', import.meta.url).href,
-  },
-  10: {
-    obj: new URL('../assets/dice/10Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/10Dice.mtl', import.meta.url).href,
-  },
-  12: {
-    obj: new URL('../assets/dice/12Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/12Dice.mtl', import.meta.url).href,
-  },
-  20: {
-    obj: new URL('../assets/dice/20Dice.obj', import.meta.url).href,
-    mtl: new URL('../assets/dice/20Dice.mtl', import.meta.url).href,
-  },
-};
-
-const extractVertices = (geometry) => {
-  const position = geometry.getAttribute('position');
-  if (!position) return [];
-  const seen = new Set();
-  const unique = [];
-  for (let i = 0; i < position.count; i += 1) {
-    const x = position.getX(i);
-    const y = position.getY(i);
-    const z = position.getZ(i);
-    const key = `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(x, y, z);
-  }
-  return unique;
-};
-
-const createColliderForSides = (RAPIER, sides, vertices) => {
-  const dieSize = DIE_SCALES[sides];
-  
-  if (sides === 6) {
-    return RAPIER.ColliderDesc.cuboid(dieSize / 2, dieSize / 2, dieSize / 2)
-      .setRestitution(0.55)
-      .setFriction(0.32);
-  }
-
-  const convex = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
-  if (convex) {
-    convex.setRestitution(0.55).setFriction(0.32);
-    return convex;
-  }
-
-  return RAPIER.ColliderDesc.ball(dieSize / 2).setRestitution(0.55).setFriction(0.32);
-};
-
-const prepareDieMesh = (entry) => {
-  if (!entry) return null;
-  const mesh = entry.template.clone(true);
-  mesh.traverse((node) => {
-    if (node.isMesh) {
-      node.geometry = entry.geometry;
-      node.material = node.material; // Share material, don't clone
-      node.castShadow = true;
-      node.receiveShadow = true;
-    }
-  });
-
-  return { mesh, geometry: entry.geometry, vertices: entry.vertices };
-};
-
-const mulberry32 = (seed) => {
-  let t = seed + 0x6d2b79f5;
-  return () => {
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
+import {
+  ARENA_WIDTH,
+  ARENA_HEIGHT,
+  DIE_SIZE,
+  MAX_STEPS,
+  MIN_ROLL_DURATION,
+  MAX_ROLL_DURATION,
+  DICE_FACE_NORMALS,
+  DICE_TYPES,
+  DIE_SCALES,
+  DIE_DENSITIES,
+  useDiceModels,
+  setupScene,
+  buildBounds,
+  prepareDieMesh,
+  createColliderForSides,
+  mulberry32,
+} from './DiceRenderer.jsx';
 
 const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName }) => {
   const canvasRef = useRef(null);
@@ -140,14 +32,13 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const diceRef = useRef([]);
   const settleTimeoutRef = useRef(null);
   const stepRef = useRef(0);
-  const diceModelsRef = useRef({});
   const animationRef = useRef(null);
   const pendingRollRef = useRef(null);
   const rollStartedAtRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
   const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
-  const [modelsReady, setModelsReady] = useState(false);
+  const { diceModels, modelsReady } = useDiceModels();
 
   const roomKey = useMemo(() => roomId || 'default', [roomId]);
   const channelName = useMemo(() => `vtrpg-dice-${roomKey}`, [roomKey]);
@@ -168,8 +59,9 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       // Find the face normal that is most aligned with the Z-axis (up)
       let maxDot = -Infinity;
       let topValue = 0;
+      const faceNormals = DICE_FACE_NORMALS[die.sides] || [];
 
-      FACE_NORMALS.forEach(({ value, normal }) => {
+      faceNormals.forEach(({ value, normal }) => {
         const worldNormal = normal.clone().applyQuaternion(quaternion);
         const dot = worldNormal.dot(new THREE.Vector3(0, 0, 1));
         if (dot > maxDot) {
@@ -206,214 +98,6 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     renderFrame();
   };
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadModels = async () => {
-      try {
-        const entries = await Promise.all(
-          DICE_TYPES.map(async (sides) => {
-            const paths = DIE_MODEL_PATHS[sides];
-            const mtlPath = paths.mtl;
-            const objPath = paths.obj;
-            
-            // Extract the base path for resource loading
-            const basePath = mtlPath.substring(0, mtlPath.lastIndexOf('/') + 1);
-            
-            // Create fresh loader instances for each die
-            const mtlLoader = new MTLLoader();
-            mtlLoader.setResourcePath(basePath);
-            
-            const objLoader = new OBJLoader();
-            
-            // Load and apply materials
-            const materials = await mtlLoader.loadAsync(mtlPath);
-            materials.preload();
-            objLoader.setMaterials(materials);
-            
-            // Load the OBJ with materials applied
-            const obj = await objLoader.loadAsync(objPath);
-            
-            let firstMesh = null;
-            obj.traverse((child) => {
-              if (!firstMesh && child.isMesh) {
-                firstMesh = child;
-              }
-            });
-
-            const template = (firstMesh || obj).clone(true);
-            let geometry = firstMesh?.geometry || (template.isMesh ? template.geometry : null);
-            if (!geometry) {
-              throw new Error(`No geometry found for d${sides}`);
-            }
-            geometry = geometry.clone();
-            geometry.computeVertexNormals();
-
-            // Compute bounding box and scale to individual die size
-            geometry.computeBoundingBox();
-            const bbox = geometry.boundingBox;
-            const sizeX = bbox.max.x - bbox.min.x;
-            const sizeY = bbox.max.y - bbox.min.y;
-            const sizeZ = bbox.max.z - bbox.min.z;
-            const maxDimension = Math.max(sizeX, sizeY, sizeZ);
-            const targetSize = DIE_SCALES[sides];
-            const scale = targetSize / maxDimension;
-
-            // Scale the geometry vertices to match physics size
-            geometry.scale(scale, scale, scale);
-
-            // Cache extracted vertices for physics collider
-            const vertices = extractVertices(geometry);
-
-            template.traverse((node) => {
-              if (node.isMesh) {
-                node.geometry = geometry;
-                node.material = node.material; // Share material, don't clone
-                node.castShadow = true;
-                node.receiveShadow = true;
-              }
-            });
-
-            return [sides, { template, geometry, vertices }];
-          })
-        );
-
-        if (!cancelled) {
-          entries.forEach(([sides, entry]) => {
-            diceModelsRef.current[sides] = entry;
-          });
-          setModelsReady(true);
-        }
-      } catch (error) {
-        console.error('Failed to load dice models', error);
-      }
-    };
-
-    loadModels();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const setupScene = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setSize(ARENA_WIDTH, ARENA_HEIGHT);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.shadowMap.enabled = true;
-
-    const scene = new THREE.Scene();
-    scene.background = null;
-
-    const aspect = ARENA_WIDTH / ARENA_HEIGHT;
-    const frustumSize = ARENA_HEIGHT;
-    const camera = new THREE.OrthographicCamera(
-      (-frustumSize * aspect) / 2,
-      (frustumSize * aspect) / 2,
-      frustumSize / 2,
-      -frustumSize / 2,
-      1,
-      1000
-    );
-    camera.position.set(0, 0, 800);
-    camera.lookAt(0, 0, 0);
-
-    const ambient = new THREE.AmbientLight(0xffffff, 0.85);
-    const directional = new THREE.DirectionalLight(0xffffff, 0.9);
-    directional.position.set(120, -80, 300);
-    directional.castShadow = true;
-
-    scene.add(ambient);
-    scene.add(directional);
-
-    rendererRef.current = { renderer, camera };
-    sceneRef.current = scene;
-  };
-
-  const buildBounds = () => {
-    const RAPIER = rapierRef.current;
-    const world = worldRef.current;
-    if (!RAPIER || !world) return;
-
-    // Add margin so dice don't visually clip canvas edges
-    const VISUAL_MARGIN = DIE_SIZE;
-    const halfWidth = ARENA_WIDTH / 2 - VISUAL_MARGIN;
-    const halfHeight = ARENA_HEIGHT / 2 - VISUAL_MARGIN;
-
-    // Use large cuboid colliders instead of halfspace for more reliable collision
-    const floorDepth = WALL_THICKNESS;
-    const wallDepth = DIE_SIZE * 4;
-
-    // Floor
-    const floor = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, -DIE_SIZE - floorDepth / 2)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
-        .setRestitution(0.5)
-        .setFriction(0.6),
-      floor
-    );
-
-    // Ceiling
-    const ceiling = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, DIE_SIZE * 3 + floorDepth / 2)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
-        .setRestitution(0.3)
-        .setFriction(0.5),
-      ceiling
-    );
-
-    // Right wall
-    const rightWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(halfWidth + WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      rightWall
-    );
-
-    // Left wall
-    const leftWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-halfWidth - WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      leftWall
-    );
-
-    // Top wall
-    const topWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, halfHeight + WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      topWall
-    );
-
-    // Bottom wall
-    const bottomWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -halfHeight - WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      bottomWall
-    );
-  };
-
   const initializePhysics = useCallback(async () => {
     if (rapierRef.current && worldRef.current) return;
     const RAPIER = await import('@dimforge/rapier3d-compat');
@@ -430,7 +114,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     integrationParameters.numInternalPgsIterations = 1;
     
     worldRef.current = world;
-    buildBounds();
+    buildBounds(world, RAPIER);
   }, []);
 
   const randomInRange = (rng, min, max) => min + (max - min) * rng();
@@ -447,7 +131,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     const scene = sceneRef.current;
     if (!RAPIER || !scene) return;
 
-    const modelEntry = diceModelsRef.current[sides];
+    const modelEntry = diceModels[sides];
     if (!modelEntry) {
       setStatus('loading');
       return;
@@ -464,7 +148,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     integrationParameters.numAdditionalFrictionIterations = 4;
     integrationParameters.numInternalPgsIterations = 1;
     worldRef.current = world;
-    buildBounds();
+    buildBounds(world, RAPIER);
     const dice = Array.from({ length: count }, () => {
       const { mesh, geometry, vertices } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
@@ -508,12 +192,12 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       world.createCollider(colliderDesc, body);
       scene.add(die.mesh);
 
-      return { mesh: die.mesh, bodyHandle: body.handle };
+      return { mesh: die.mesh, bodyHandle: body.handle, sides };
     });
 
     diceRef.current = preparedDice;
     stepRef.current = 0;
-  }, []);
+  }, [diceModels]);
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
@@ -573,7 +257,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
   const startSimulation = useCallback(
     async (seed, count, sides) => {
-      if (!modelsReady || !diceModelsRef.current[sides]) {
+      if (!modelsReady || !diceModels[sides]) {
         setStatus('loading');
         pendingRollRef.current = { seed, count, sides };
         return;
@@ -588,7 +272,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
       animationRef.current = requestAnimationFrame(tick);
     },
-    [initializePhysics, modelsReady, seedDice]
+    [initializePhysics, modelsReady, seedDice, diceModels]
   );
 
   useEffect(() => {
@@ -623,7 +307,14 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   );
 
   useEffect(() => {
-    setupScene();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const sceneSetup = setupScene(canvas);
+    if (!sceneSetup) return;
+
+    rendererRef.current = { renderer: sceneSetup.renderer, camera: sceneSetup.camera };
+    sceneRef.current = sceneSetup.scene;
     initializePhysics();
 
     return () => {
