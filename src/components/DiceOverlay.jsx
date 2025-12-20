@@ -1,40 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import * as THREE from 'three';
-
-const ARENA_WIDTH = 720;
-const ARENA_HEIGHT = 420;
-const DIE_SIZE = 32;
-const MAX_STEPS = 300;
-const WALL_THICKNESS = 12;
-const MIN_ROLL_DURATION = 1000;
-const MAX_ROLL_DURATION = 2500;
-const FACE_NORMALS = [
-  { value: 1, normal: new THREE.Vector3(0, 0, 1) },
-  { value: 6, normal: new THREE.Vector3(0, 0, -1) },
-  { value: 2, normal: new THREE.Vector3(0, 1, 0) },
-  { value: 5, normal: new THREE.Vector3(0, -1, 0) },
-  { value: 3, normal: new THREE.Vector3(1, 0, 0) },
-  { value: 4, normal: new THREE.Vector3(-1, 0, 0) },
-];
-
-const mulberry32 = (seed) => {
-  let t = seed + 0x6d2b79f5;
-  return () => {
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
-
-const createDieMesh = () => {
-  const geometry = new THREE.BoxGeometry(DIE_SIZE, DIE_SIZE, DIE_SIZE);
-  const material = new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.2, roughness: 0.6 });
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-};
+import {
+  ARENA_WIDTH,
+  ARENA_HEIGHT,
+  DIE_SIZE,
+  MAX_STEPS,
+  MIN_ROLL_DURATION,
+  MAX_ROLL_DURATION,
+  DICE_FACE_NORMALS,
+  DICE_TYPES,
+  DIE_SCALES,
+  DIE_DENSITIES,
+  useDiceModels,
+  setupScene,
+  buildBounds,
+  prepareDieMesh,
+  createColliderForSides,
+  mulberry32,
+} from './DiceRenderer.jsx';
 
 const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName }) => {
   const canvasRef = useRef(null);
@@ -42,149 +26,96 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const sceneRef = useRef(null);
   const rapierRef = useRef(null);
   const worldRef = useRef(null);
+  const channelRef = useRef(null);
+  const instanceIdRef = useRef(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  const sharedWorkerRef = useRef(null);
   const diceRef = useRef([]);
+  const settleTimeoutRef = useRef(null);
   const stepRef = useRef(0);
   const animationRef = useRef(null);
+  const pendingRollRef = useRef(null);
   const rollStartedAtRef = useRef(null);
-  const settleTimeoutRef = useRef(null);
-  const clearTimeoutRef = useRef(null);
-  const currentRollRef = useRef(null);
-  const reportedRollRef = useRef(null);
   const [diceCount, setDiceCount] = useState(2);
-  const [velocity, setVelocity] = useState(1.0);
+  const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
+  const { diceModels, modelsReady } = useDiceModels();
+
+  const roomKey = useMemo(() => roomId || 'default', [roomId]);
+  const channelName = useMemo(() => `vtrpg-dice-${roomKey}`, [roomKey]);
+
+  useEffect(() => {
+    if (status !== 'settled' || !onDiceResult) return;
+
+    const world = worldRef.current;
+    if (!world) return;
+
+    const results = diceRef.current.map((die) => {
+      const body = world.getRigidBody(die.bodyHandle);
+      if (!body) return 0;
+
+      const rotation = body.rotation();
+      const quaternion = new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
+
+      // Find the face normal that is most aligned with the Z-axis (up)
+      let maxDot = -Infinity;
+      let topValue = 0;
+      const faceNormals = DICE_FACE_NORMALS[die.sides] || [];
+
+      faceNormals.forEach(({ value, normal }) => {
+        const worldNormal = normal.clone().applyQuaternion(quaternion);
+        const dot = worldNormal.dot(new THREE.Vector3(0, 0, 1));
+        if (dot > maxDot) {
+          maxDot = dot;
+          topValue = value;
+        }
+      });
+      return topValue;
+    });
+
+    if (results.length > 0) {
+      onDiceResult(results);
+    }
+  }, [status, onDiceResult]);
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
-    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     const world = worldRef.current;
-    diceRef.current.forEach((die) => {
-      const body = world?.getRigidBody(die.bodyHandle);
-      if (body) world.removeRigidBody(body);
-      sceneRef.current?.remove(die.mesh);
-    });
+    if (world) {
+      // Remove all dice
+      diceRef.current.forEach((die) => {
+        const body = world.getRigidBody(die.bodyHandle);
+        if (body) world.removeRigidBody(body);
+        sceneRef.current?.remove(die.mesh);
+      });
+      // Clear the world completely for determinism
+      world.free();
+      worldRef.current = null;
+    }
     diceRef.current = [];
     stepRef.current = 0;
     // Render one final frame to clear the canvas
     renderFrame();
   };
 
-  const setupScene = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setSize(ARENA_WIDTH, ARENA_HEIGHT);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.shadowMap.enabled = true;
-
-    const scene = new THREE.Scene();
-    scene.background = null;
-
-    const camera = new THREE.PerspectiveCamera(35, ARENA_WIDTH / ARENA_HEIGHT, 1, 1000);
-    camera.position.set(0, 0, 700);
-    camera.lookAt(0, 0, 0);
-
-    const ambient = new THREE.AmbientLight(0xffffff, 0.85);
-    const directional = new THREE.DirectionalLight(0xffffff, 0.9);
-    directional.position.set(120, -80, 300);
-    directional.castShadow = true;
-
-    scene.add(ambient);
-    scene.add(directional);
-
-    rendererRef.current = { renderer, camera };
-    sceneRef.current = scene;
-  };
-
-  const buildBounds = () => {
-    const RAPIER = rapierRef.current;
-    const world = worldRef.current;
-    if (!RAPIER || !world) return;
-
-    const halfWidth = ARENA_WIDTH / 2;
-    const halfHeight = ARENA_HEIGHT / 2;
-
-    // Use large cuboid colliders instead of halfspace for more reliable collision
-    const floorDepth = WALL_THICKNESS;
-    const wallDepth = DIE_SIZE * 4;
-
-    // Floor
-    const floor = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, -DIE_SIZE - floorDepth / 2)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
-        .setRestitution(0.5)
-        .setFriction(0.6),
-      floor
-    );
-
-    // Ceiling
-    const ceiling = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, DIE_SIZE * 3 + floorDepth / 2)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, halfHeight * 2, floorDepth / 2)
-        .setRestitution(0.3)
-        .setFriction(0.5),
-      ceiling
-    );
-
-    // Right wall
-    const rightWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(halfWidth + WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      rightWall
-    );
-
-    // Left wall
-    const leftWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(-halfWidth - WALL_THICKNESS / 2, 0, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(WALL_THICKNESS / 2, halfHeight * 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      leftWall
-    );
-
-    // Top wall
-    const topWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, halfHeight + WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      topWall
-    );
-
-    // Bottom wall
-    const bottomWall = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -halfHeight - WALL_THICKNESS / 2, wallDepth / 2 - DIE_SIZE)
-    );
-    world.createCollider(
-      RAPIER.ColliderDesc.cuboid(halfWidth * 2, WALL_THICKNESS / 2, wallDepth / 2)
-        .setRestitution(0.6)
-        .setFriction(0.5),
-      bottomWall
-    );
-  };
-
-  const initializePhysics = async () => {
+  const initializePhysics = useCallback(async () => {
     if (rapierRef.current && worldRef.current) return;
     const RAPIER = await import('@dimforge/rapier3d-compat');
     await RAPIER.init();
     rapierRef.current = RAPIER;
-    worldRef.current = new RAPIER.World({ x: 0, y: 0, z: -600 });
-    buildBounds();
-  };
+    
+    const world = new RAPIER.World({ x: 0, y: 0, z: -1200 });
+    
+    // Set integration parameters explicitly for determinism
+    const integrationParameters = world.integrationParameters;
+    integrationParameters.dt = 1 / 60; // Match the timestep used in world.step()
+    integrationParameters.numSolverIterations = 4;
+    integrationParameters.numAdditionalFrictionIterations = 4;
+    integrationParameters.numInternalPgsIterations = 1;
+    
+    worldRef.current = world;
+    buildBounds(world, RAPIER);
+  }, []);
 
   const randomInRange = (rng, min, max) => min + (max - min) * rng();
 
@@ -195,74 +126,49 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     return quaternion;
   };
 
-  const determineFaceUp = (quaternion) => {
-    const up = new THREE.Vector3(0, 0, 1);
-    let best = { value: null, alignment: -Infinity };
-
-    FACE_NORMALS.forEach(({ value, normal }) => {
-      const worldNormal = normal.clone().applyQuaternion(quaternion);
-      const alignment = worldNormal.dot(up);
-      if (alignment > best.alignment) {
-        best = { value, alignment };
-      }
-    });
-
-    return best.value;
-  };
-
-  const collectResults = () => {
-    const world = worldRef.current;
-    if (!world) return [];
-
-    return diceRef.current
-      .map((die) => {
-        const body = world.getRigidBody(die.bodyHandle);
-        if (!body) return null;
-        const rotation = body.rotation();
-        const quaternion = new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
-        return determineFaceUp(quaternion);
-      })
-      .filter((value) => Number.isInteger(value));
-  };
-
-  const reportResults = () => {
-    if (!onDiceResult) return;
-    const roll = currentRollRef.current;
-    if (!roll) return;
-    const rollId = `${roll.seed}-${roll.count}-${roll.triggeredBy || 'unknown'}`;
-    if (reportedRollRef.current === rollId) return;
-    const results = collectResults();
-    if (!results.length) return;
-    reportedRollRef.current = rollId;
-    onDiceResult({ ...roll, results });
-  };
-
-  const seedDice = (seed, count, velocityMultiplier = 1.0) => {
-    const world = worldRef.current;
+  const seedDice = useCallback(async (seed, count, sides) => {
     const RAPIER = rapierRef.current;
     const scene = sceneRef.current;
-    if (!world || !RAPIER || !scene) return;
+    if (!RAPIER || !scene) return;
+
+    const modelEntry = diceModels[sides];
+    if (!modelEntry) {
+      setStatus('loading');
+      return;
+    }
 
     const rng = mulberry32(seed);
     teardown();
+    
+    // Recreate world from scratch for determinism
+    const world = new RAPIER.World({ x: 0, y: 0, z: -1200 });
+    const integrationParameters = world.integrationParameters;
+    integrationParameters.dt = 1 / 60;
+    integrationParameters.numSolverIterations = 4;
+    integrationParameters.numAdditionalFrictionIterations = 4;
+    integrationParameters.numInternalPgsIterations = 1;
+    worldRef.current = world;
+    buildBounds(world, RAPIER);
     const dice = Array.from({ length: count }, () => {
-      const mesh = createDieMesh();
+      const { mesh, geometry, vertices } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
       return {
         mesh,
+        geometry,
+        vertices,
         position: {
           x: randomInRange(rng, -ARENA_WIDTH / 2 + DIE_SIZE, ARENA_WIDTH / 2 - DIE_SIZE),
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
         },
         velocity: {
-          x: randomInRange(rng, -480, 480) * velocityMultiplier,
-          y: randomInRange(rng, 360, 640) * velocityMultiplier,
-          z: randomInRange(rng, -50, 50) * velocityMultiplier,
+          x: randomInRange(rng, -450, 450),
+          y: randomInRange(rng, 320, 620),
+          z: randomInRange(rng, 0, 100),
         },
         angularVelocity: {
-          x: randomInRange(rng, -4, 4) * velocityMultiplier,
-          y: randomInRange(rng, -4, 4) * velocityMultiplier,
-          z: randomInRange(rng, -4, 4) * velocityMultiplier,
+          x: randomInRange(rng, -10, 10),
+          y: randomInRange(rng, -10, 10),
+          z: randomInRange(rng, -10, 10),
         },
         rotation,
       };
@@ -280,19 +186,18 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       body.setLinvel(die.velocity, true);
       body.setAngvel(die.angularVelocity, true);
 
-      const colliderDesc = RAPIER.ColliderDesc.cuboid(DIE_SIZE / 2, DIE_SIZE / 2, DIE_SIZE / 2)
-        .setRestitution(0.55)
-        .setFriction(0.32);
+      const colliderDesc = createColliderForSides(RAPIER, sides, die.vertices);
+      colliderDesc.setDensity(DIE_DENSITIES[sides]);
 
       world.createCollider(colliderDesc, body);
       scene.add(die.mesh);
 
-      return { mesh: die.mesh, bodyHandle: body.handle };
+      return { mesh: die.mesh, bodyHandle: body.handle, sides };
     });
 
     diceRef.current = preparedDice;
     stepRef.current = 0;
-  };
+  }, [diceModels]);
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
@@ -316,7 +221,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const tick = () => {
     const world = worldRef.current;
     if (!world) return;
-    world.step();
+    world.step(null, 1 / 60); // Fixed 60 FPS timestep for deterministic physics
     renderFrame();
     stepRef.current += 1;
     const elapsed = rollStartedAtRef.current
@@ -331,11 +236,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       const linvel = body.linvel();
       const angvel = body.angvel();
       return (
-        Math.abs(linvel.x) > 1.2 ||
-        Math.abs(linvel.y) > 1.2 ||
-        Math.abs(angvel.x) > 0.18 ||
-        Math.abs(angvel.y) > 0.18 ||
-        Math.abs(angvel.z) > 0.18
+        Math.abs(linvel.x) > 1.6 ||
+        Math.abs(linvel.y) > 1.6 ||
+        Math.abs(angvel.x) > 0.25 ||
+        Math.abs(angvel.y) > 0.25 ||
+        Math.abs(angvel.z) > 0.25
       );
     });
 
@@ -346,34 +251,70 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
         clearTimeout(settleTimeoutRef.current);
         settleTimeoutRef.current = null;
       }
-      diceRef.current.forEach((die) => {
-        const body = world.getRigidBody(die.bodyHandle);
-        body?.setLinvel({ x: 0, y: 0, z: 0 }, true);
-        body?.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      });
-      reportResults();
       setStatus('settled');
     }
   };
 
-  const startSimulation = async ({ seed, count, triggeredBy }) => {
-    await initializePhysics();
-    seedDice(seed, count, velocity);
-    setStatus('rolling');
-    rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    currentRollRef.current = { seed, count, triggeredBy };
-    reportedRollRef.current = null;
-    if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
-    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
-    settleTimeoutRef.current = setTimeout(() => {
-      reportResults();
-      setStatus('settled');
-    }, MAX_ROLL_DURATION);
-    animationRef.current = requestAnimationFrame(tick);
-  };
+  const startSimulation = useCallback(
+    async (seed, count, sides) => {
+      if (!modelsReady || !diceModels[sides]) {
+        setStatus('loading');
+        pendingRollRef.current = { seed, count, sides };
+        return;
+      }
+
+      pendingRollRef.current = null;
+      setStatus('rolling');
+      if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+      settleTimeoutRef.current = setTimeout(() => setStatus('settled'), 3200);
+      await initializePhysics();
+      await seedDice(seed, count, sides);
+      rollStartedAtRef.current = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      animationRef.current = requestAnimationFrame(tick);
+    },
+    [initializePhysics, modelsReady, seedDice, diceModels]
+  );
 
   useEffect(() => {
-    setupScene();
+    if (modelsReady && pendingRollRef.current) {
+      const pending = pendingRollRef.current;
+      pendingRollRef.current = null;
+      startSimulation(pending.seed, pending.count, pending.sides);
+    }
+  }, [modelsReady, startSimulation]);
+
+  const postLocalRoll = useCallback(
+    (seed, count, sides) => {
+      const message = { type: 'dice-roll', seed, count, sides, room: roomKey, source: instanceIdRef.current };
+      if (sharedWorkerRef.current) {
+        sharedWorkerRef.current.postMessage(message);
+      }
+      if (channelRef.current) {
+        channelRef.current.postMessage(message);
+      }
+    },
+    [roomKey]
+  );
+
+  const handleIncomingRoll = useCallback(
+    (data) => {
+      if (!data || data.type !== 'dice-roll' || data.room !== roomKey || data.source === instanceIdRef.current) return;
+      const nextSides = data.sides || diceSides;
+      setDiceSides(nextSides);
+      startSimulation(data.seed, data.count, nextSides);
+    },
+    [diceSides, roomKey, startSimulation]
+  );
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const sceneSetup = setupScene(canvas);
+    if (!sceneSetup) return;
+
+    rendererRef.current = { renderer: sceneSetup.renderer, camera: sceneSetup.camera };
+    sceneRef.current = sceneSetup.scene;
     initializePhysics();
 
     return () => {
@@ -382,36 +323,63 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       rendererRef.current?.renderer?.dispose();
       rendererRef.current = null;
       sceneRef.current = null;
+      if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!diceRoll || !diceRoll.seed || !diceRoll.count) return;
-    if (currentRollRef.current?.seed === diceRoll.seed && currentRollRef.current?.count === diceRoll.count) return;
-    startSimulation(diceRoll);
+    const nextSides = diceRoll.sides || diceSides;
+    postLocalRoll(diceRoll.seed, diceRoll.count, nextSides);
+    if (diceRoll.sides) setDiceSides(diceRoll.sides);
+    startSimulation(diceRoll.seed, diceRoll.count, nextSides);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diceRoll]);
 
   useEffect(() => {
-    if (status === 'settled') {
-      if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
-      clearTimeoutRef.current = setTimeout(() => {
-        teardown();
-        setStatus('idle');
-        currentRollRef.current = null;
-        reportedRollRef.current = null;
-      }, 3000);
+    const cleanupFns = [];
+
+    if (typeof SharedWorker !== 'undefined') {
+      try {
+        const worker = new SharedWorker(new URL('../workers/diceBus.js', import.meta.url), {
+          type: 'module',
+          name: 'vtrpg-dice-bus',
+        });
+        worker.port.start();
+        worker.port.onmessage = (event) => handleIncomingRoll(event.data);
+        sharedWorkerRef.current = worker.port;
+        cleanupFns.push(() => {
+          worker.port.onmessage = null;
+          worker.port.close();
+          sharedWorkerRef.current = null;
+        });
+      } catch (error) {
+        console.warn('SharedWorker not available for dice sync', error);
+      }
     }
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel(channelName);
+      channel.onmessage = (event) => handleIncomingRoll(event.data);
+      channelRef.current = channel;
+      cleanupFns.push(() => {
+        channel.onmessage = null;
+        channel.close();
+        channelRef.current = null;
+      });
+    }
+
     return () => {
-      if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
+      cleanupFns.forEach((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [channelName, handleIncomingRoll]);
 
-  const broadcastRoll = (seed, count, triggeredBy) => {
+  const broadcastRoll = (seed, count, sides, triggeredBy) => {
+    postLocalRoll(seed, count, sides);
     if (!onSendDiceRoll) return;
-    onSendDiceRoll(seed, count, triggeredBy);
+    onSendDiceRoll(seed, count, sides, triggeredBy);
   };
 
   const rollDice = () => {
@@ -421,9 +389,18 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       : Math.floor(Math.random() * 1_000_000_000) || Date.now();
     const triggeredBy = userName || 'Okänd';
     setStatus('rolling');
-    broadcastRoll(seed, diceCount, triggeredBy);
-    startSimulation({ seed, count: diceCount, triggeredBy });
+    broadcastRoll(seed, diceCount, diceSides, triggeredBy);
+    startSimulation(seed, diceCount, diceSides);
   };
+
+  const isRollingDisabled = !modelsReady || status === 'rolling';
+  const statusLabel = !modelsReady
+    ? 'Loading dice models...'
+    : status === 'rolling'
+      ? 'Rolling...'
+      : status === 'settled'
+        ? 'Result locked'
+        : 'Idle';
 
   return (
     <div className="dice-overlay" aria-label="dice-overlay">
@@ -434,28 +411,34 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
           <button type="button" onClick={() => setDiceCount((prev) => Math.max(1, prev - 1))} aria-label="decrease dice">
             -
           </button>
-          <button type="button" onClick={() => setDiceCount((prev) => Math.min(12, prev + 1))} aria-label="increase dice">
+          <button type="button" onClick={() => setDiceCount((prev) => Math.min(20, prev + 1))} aria-label="increase dice">
             +
           </button>
         </div>
-        <div className="velocity-control">
-          <label htmlFor="velocity-slider">Force: {velocity.toFixed(1)}x</label>
-          <input
-            id="velocity-slider"
-            type="range"
-            min="0.3"
-            max="2.0"
-            step="0.1"
-            value={velocity}
-            onChange={(e) => setVelocity(parseFloat(e.target.value))}
-            aria-label="dice throw force"
-          />
+        <div className="dice-type-buttons" role="group" aria-label="Select dice type">
+          {DICE_TYPES.map((sides) => (
+            <button
+              key={sides}
+              type="button"
+              className={sides === diceSides ? 'active' : ''}
+              onClick={() => setDiceSides(sides)}
+              aria-label={`use d${sides}`}
+            >
+              d{sides}
+            </button>
+          ))}
         </div>
-        <button type="button" className="roll-button" onClick={rollDice} aria-label="roll dice">
+        <button
+          type="button"
+          className="roll-button"
+          onClick={rollDice}
+          aria-label="roll dice"
+          disabled={isRollingDisabled}
+        >
           Roll dice
         </button>
-        <div className="dice-status" data-state={status}>
-          {status === 'rolling' ? 'Rolling...' : status === 'settled' ? 'Result locked' : 'Idle'}
+        <div className="dice-status" data-state={!modelsReady ? 'loading' : status}>
+          {statusLabel} (d{diceSides})
         </div>
       </div>
     </div>
@@ -464,7 +447,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
 DiceOverlay.propTypes = {
   roomId: PropTypes.string,
-  diceRoll: PropTypes.object,
+  diceRoll: PropTypes.shape({
+    seed: PropTypes.number,
+    count: PropTypes.number,
+    sides: PropTypes.number,
+  }),
   onSendDiceRoll: PropTypes.func,
   onDiceResult: PropTypes.func,
   userName: PropTypes.string,

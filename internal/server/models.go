@@ -49,5 +49,6 @@ type SharedImage struct {
 type DiceRollPayload struct {
 	Seed        uint32 `json:"seed"`
 	Count       int    `json:"count"`
+	Sides       int    `json:"sides"`
 	TriggeredBy string `json:"triggeredBy"`
 }

@@ -115,18 +115,21 @@ const App = () => {
 
   const socket = useWebSocket(roomId, user, handleMessage, setConnectionError);
 
-  const sendDiceRoll = useCallback((seed, count, triggeredBy) => {
+  const sendDiceRoll = useCallback((seed, count, sides, triggeredBy) => {
     const roller = triggeredBy || user?.name || 'Okänd';
-    const payload = { seed, count, triggeredBy: roller };
+    const payload = { seed, count, sides, triggeredBy: roller };
     diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const message = JSON.stringify({ type: 'DiceRoll', payload });
     socket.send(message);
   }, [socket, user?.name]);
 
-  const handleDiceResult = useCallback(({ seed, count, results, triggeredBy }) => {
+  const handleDiceResult = useCallback((results) => {
+    if (!diceRoll) return;
+
+    const { seed, count, triggeredBy } = diceRoll;
     const timestamp = new Date().toISOString();
-    const roller = triggeredBy || diceRoll?.triggeredBy || user?.name || 'Okänd';
+    const roller = triggeredBy || user?.name || 'Okänd';
     const entry = { id: `${seed}-${timestamp}`, seed, count, results, timestamp, triggeredBy: roller };
     setDiceLog((prev) => [entry, ...prev.filter((item) => item.id !== entry.id)].slice(0, 50));
 
@@ -188,7 +191,7 @@ const App = () => {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Virtual TTRPG Board</h1>
+        <h3>Virtual TTRPG Board</h3>
       </header>
       {connectionError && <p className="error">{connectionError}</p>}
       {!user ? (

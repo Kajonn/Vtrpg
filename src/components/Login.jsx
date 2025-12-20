@@ -13,23 +13,29 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
     setError('');
     if (!room || !name) return;
 
+    let gmCheckPassed = true;
     if (role === 'gm') {
       try {
         setSubmitting(true);
         const response = await fetch(`/rooms/${room}/gm`);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload?.message || 'Kunde inte kontrollera spelledaren.');
-        if (payload.active) {
-          setError('Det finns redan en spelledare i detta rum.');
-          return;
+        if (response.ok) {
+          const payload = await response.json();
+          if (payload.active) {
+            setError('Det finns redan en spelledare i detta rum.');
+            gmCheckPassed = false;
+          }
+        } else {
+          // If the GM check endpoint is unavailable, continue with a warning to avoid blocking offline play.
+          console.warn('GM availability check failed', response.status);
         }
       } catch (err) {
-        setError(err.message || 'Ett fel uppstod. Försök igen.');
-        return;
+        console.warn('GM availability check error', err);
       } finally {
         setSubmitting(false);
       }
     }
+
+    if (!gmCheckPassed) return;
 
     onLogin({ name, role });
     onRoomChange(room);

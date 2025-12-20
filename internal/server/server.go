@@ -872,6 +872,7 @@ func (s *Server) broadcastDiceRoll(roomID string, diceRoll DiceRollPayload) {
 		slog.String("room", roomID),
 		slog.Uint64("seed", uint64(diceRoll.Seed)),
 		slog.Int("count", diceRoll.Count),
+		slog.Int("sides", diceRoll.Sides),
 		slog.String("triggeredBy", diceRoll.TriggeredBy),
 	)
 	s.broadcast(roomID, payload)
