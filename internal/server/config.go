@@ -13,6 +13,7 @@ type Config struct {
 	AllowedOrigins []string
 	FrontendDir    string
 	UploadDir      string
+	DBPath         string
 }
 
 const (
@@ -21,6 +22,7 @@ const (
 	defaultAllowedOrigin = "*"
 	defaultFrontendDir   = "dist"
 	defaultUploadDir     = "uploads"
+	defaultDBPath        = "data/vtrpg.db"
 )
 
 // LoadConfig builds a Config instance using environment variables when present.
@@ -31,6 +33,7 @@ func LoadConfig() Config {
 		AllowedOrigins: parseAllowedOrigins(getEnv("ALLOWED_ORIGINS", defaultAllowedOrigin)),
 		FrontendDir:    getEnv("FRONTEND_DIR", defaultFrontendDir),
 		UploadDir:      getEnv("UPLOAD_DIR", defaultUploadDir),
+		DBPath:         getEnv("DB_PATH", defaultDBPath),
 	}
 
 	if rawMax := os.Getenv("MAX_UPLOAD_SIZE"); rawMax != "" {
