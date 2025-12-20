@@ -2,12 +2,14 @@ package server
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +30,8 @@ type Server struct {
 	mux             *http.ServeMux
 	allowedOrigins  []string
 	allowAllOrigins bool
+	rooms           map[string]Room
+	roomsBySlug     map[string]string
 	images          map[string][]imageResponse
 	diceLogs        map[string][]diceLogEntry
 	mu              sync.RWMutex
@@ -49,6 +53,8 @@ func New(cfg Config) (*Server, error) {
 		logger:         logger,
 		mux:            http.NewServeMux(),
 		allowedOrigins: cfg.AllowedOrigins,
+		rooms:          make(map[string]Room),
+		roomsBySlug:    make(map[string]string),
 		images:         make(map[string][]imageResponse),
 		diceLogs:       make(map[string][]diceLogEntry),
 		wsRooms:        make(map[string]map[*wsConn]clientProfile),
@@ -72,11 +78,18 @@ func (s *Server) Run() error {
 	return http.ListenAndServe(addr, handler)
 }
 
+// Router exposes the configured mux with middleware applied.
+func (s *Server) Router() http.Handler {
+	return s.withCORS(s.loggingMiddleware(s.mux))
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
+	s.mux.HandleFunc("/rooms", s.handleRooms)
+	s.mux.HandleFunc("/rooms/slug/", s.handleRoomLookup)
 	s.mux.HandleFunc("/rooms/", s.handleRoom)
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.cfg.UploadDir))))
 	s.mux.Handle("/", s.spaHandler())
@@ -150,6 +163,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 type imageResponse struct {
 	ID        string    `json:"id"`
+	RoomID    string    `json:"roomId"`
 	URL       string    `json:"url"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -171,6 +185,52 @@ type clientProfile struct {
 	Role string `json:"role"`
 }
 
+func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var payload struct {
+			Name      string `json:"name"`
+			CreatedBy string `json:"createdBy"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(payload.Name)
+		if name == "" {
+			name = "Untitled room"
+		}
+		createdBy := strings.TrimSpace(payload.CreatedBy)
+		room := s.createRoom(name, createdBy)
+		writeJSON(w, http.StatusCreated, room)
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.listRooms())
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleRoomLookup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/slug"), "/")
+	if slug == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	room, ok := s.getRoomBySlug(slug)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, room)
+}
+
 func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
 	parts := strings.Split(trimmed, "/")
@@ -178,7 +238,11 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	roomID := parts[0]
+	roomID, ok := s.resolveRoomID(parts[0])
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 
 	switch parts[1] {
 	case "gm":
@@ -267,6 +331,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		x, y := s.nextPosition(roomID)
 		img := imageResponse{
 			ID:        s.newID(),
+			RoomID:    roomID,
 			URL:       payload.URL,
 			Status:    "done",
 			CreatedAt: time.Now(),
@@ -275,7 +340,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		}
 		s.storeImage(roomID, img)
 		s.broadcastSharedImage(roomID, img)
-		writeJSON(w, http.StatusOK, img)
+		writeJSON(w, http.StatusCreated, img)
 		return
 	}
 
@@ -320,6 +385,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		x, y := s.nextPosition(roomID)
 		img := imageResponse{
 			ID:        s.newID(),
+			RoomID:    roomID,
 			URL:       url,
 			Status:    "done",
 			CreatedAt: time.Now(),
@@ -332,10 +398,10 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 	}
 
 	if len(uploaded) == 1 {
-		writeJSON(w, http.StatusOK, uploaded[0])
+		writeJSON(w, http.StatusCreated, uploaded[0])
 		return
 	}
-	writeJSON(w, http.StatusOK, uploaded)
+	writeJSON(w, http.StatusCreated, uploaded)
 }
 
 func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request, roomID, imageID string) {
@@ -525,8 +591,77 @@ func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageRespon
 	return imageResponse{}, false
 }
 
+func (s *Server) createRoom(name, createdBy string) Room {
+	if createdBy == "" {
+		createdBy = "anonymous"
+	}
+	room := Room{
+		ID:        s.newID(),
+		Slug:      s.newSlug(),
+		Name:      name,
+		CreatedBy: createdBy,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	s.mu.Lock()
+	s.rooms[room.ID] = room
+	s.roomsBySlug[room.Slug] = room.ID
+	s.mu.Unlock()
+
+	return room
+}
+
+func (s *Server) listRooms() []Room {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rooms := make([]Room, 0, len(s.rooms))
+	for _, room := range s.rooms {
+		rooms = append(rooms, room)
+	}
+	return rooms
+}
+
+func (s *Server) getRoomBySlug(slug string) (Room, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.roomsBySlug[slug]
+	if !ok {
+		return Room{}, false
+	}
+	room, ok := s.rooms[id]
+	return room, ok
+}
+
+func (s *Server) resolveRoomID(identifier string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if id, ok := s.roomsBySlug[identifier]; ok {
+		return id, true
+	}
+	if _, ok := s.rooms[identifier]; ok {
+		return identifier, true
+	}
+	return "", false
+}
+
 func (s *Server) newID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
+func (s *Server) newSlug() string {
+	for {
+		buf := make([]byte, 6)
+		if _, err := rand.Read(buf); err != nil {
+			return strconv.FormatInt(time.Now().UnixNano(), 36)
+		}
+		slug := base64.RawURLEncoding.EncodeToString(buf)
+		s.mu.RLock()
+		_, exists := s.roomsBySlug[slug]
+		s.mu.RUnlock()
+		if !exists {
+			return slug
+		}
+	}
 }
 
 type wsConn struct {
@@ -539,6 +674,24 @@ func (c *wsConn) write(opcode byte, payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return writeFrame(c.conn, opcode, payload)
+}
+
+func detectContentType(file io.Reader, filename string) (string, error) {
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(file, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	mimeType := http.DetectContentType(buf[:n])
+	if mimeType == "application/octet-stream" {
+		ext := strings.ToLower(filepath.Ext(filename))
+		if ext != "" {
+			if detected := mime.TypeByExtension(ext); detected != "" {
+				mimeType = detected
+			}
+		}
+	}
+	return mimeType, nil
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -599,6 +752,11 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 	if roomID == "" {
 		http.Error(w, "missing room id", http.StatusBadRequest)
+		return
+	}
+	roomID, ok := s.resolveRoomID(roomID)
+	if !ok {
+		http.Error(w, "room not found", http.StatusNotFound)
 		return
 	}
 

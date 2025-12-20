@@ -21,6 +21,7 @@ type User struct {
 // Room represents a shared space.
 type Room struct {
 	ID        string    `json:"id"`
+	Slug      string    `json:"slug"`
 	Name      string    `json:"name"`
 	CreatedBy string    `json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`
