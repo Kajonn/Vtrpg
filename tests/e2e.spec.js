@@ -221,4 +221,20 @@ test.describe('drag-drop and zoom', () => {
     // Cleanup
     await context.close();
   });
+
+  test('restores a saved session from localStorage', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'delta');
+    await page.fill('input[placeholder="Display name"]', 'Returner');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    await expect(page.getByText('Room: delta')).toBeVisible();
+
+    await page.reload();
+
+    // The login form should be skipped because the session is restored
+    await expect(page.getByText('Room: delta')).toBeVisible();
+    await expect(page.getByText('Returner')).toBeVisible();
+  });
 });

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,11 +31,7 @@ type Server struct {
 	mux             *http.ServeMux
 	allowedOrigins  []string
 	allowAllOrigins bool
-	rooms           map[string]Room
-	roomsBySlug     map[string]string
-	images          map[string][]imageResponse
-	diceLogs        map[string][]diceLogEntry
-	mu              sync.RWMutex
+	db              *sql.DB
 	wsRooms         map[string]map[*wsConn]clientProfile
 	gmRooms         map[string]*wsConn
 	wsMu            sync.Mutex
@@ -48,15 +45,17 @@ func New(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("ensure uploads directory: %w", err)
 	}
 
+	db, err := openDatabase(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+
 	srv := &Server{
 		cfg:            cfg,
 		logger:         logger,
 		mux:            http.NewServeMux(),
 		allowedOrigins: cfg.AllowedOrigins,
-		rooms:          make(map[string]Room),
-		roomsBySlug:    make(map[string]string),
-		images:         make(map[string][]imageResponse),
-		diceLogs:       make(map[string][]diceLogEntry),
+		db:             db,
 		wsRooms:        make(map[string]map[*wsConn]clientProfile),
 		gmRooms:        make(map[string]*wsConn),
 	}
@@ -173,6 +172,7 @@ type imageResponse struct {
 
 type diceLogEntry struct {
 	ID          string    `json:"id"`
+	RoomID      string    `json:"roomId"`
 	Seed        uint32    `json:"seed"`
 	Count       int       `json:"count"`
 	Results     []int     `json:"results"`
@@ -201,10 +201,21 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			name = "Untitled room"
 		}
 		createdBy := strings.TrimSpace(payload.CreatedBy)
-		room := s.createRoom(name, createdBy)
+		room, err := s.createRoom(name, createdBy)
+		if err != nil {
+			s.logger.Error("create room", slog.String("error", err.Error()))
+			http.Error(w, "failed to create room", http.StatusInternalServerError)
+			return
+		}
 		writeJSON(w, http.StatusCreated, room)
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.listRooms())
+		rooms, err := s.listRooms()
+		if err != nil {
+			s.logger.Error("list rooms", slog.String("error", err.Error()))
+			http.Error(w, "failed to list rooms", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, rooms)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -222,7 +233,12 @@ func (s *Server) handleRoomLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	room, ok := s.getRoomBySlug(slug)
+	room, ok, err := s.getRoomBySlug(slug)
+	if err != nil {
+		s.logger.Error("lookup room", slog.String("error", err.Error()))
+		http.Error(w, "failed to lookup room", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -238,7 +254,12 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	roomID, ok := s.resolveRoomID(parts[0])
+	roomID, ok, err := s.resolveRoomID(parts[0])
+	if err != nil {
+		s.logger.Error("resolve room", slog.String("error", err.Error()))
+		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -265,11 +286,23 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			if parts[1] == "dice" {
-				writeJSON(w, http.StatusOK, s.getDiceLogs(roomID))
+				logs, err := s.getDiceLogs(roomID)
+				if err != nil {
+					s.logger.Error("get dice logs", slog.String("error", err.Error()))
+					http.Error(w, "failed to load dice logs", http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, http.StatusOK, logs)
 				return
 			}
 			if parts[1] == "images" {
-				writeJSON(w, http.StatusOK, s.getImages(roomID))
+				images, err := s.getImages(roomID)
+				if err != nil {
+					s.logger.Error("get images", slog.String("error", err.Error()))
+					http.Error(w, "failed to load images", http.StatusInternalServerError)
+					return
+				}
+				writeJSON(w, http.StatusOK, images)
 				return
 			}
 			http.NotFound(w, r)
@@ -328,19 +361,29 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		x, y := s.nextPosition(roomID)
+		x, y, err := s.nextPosition(roomID)
+		if err != nil {
+			s.logger.Error("next position", slog.String("error", err.Error()))
+			http.Error(w, "failed to store image", http.StatusInternalServerError)
+			return
+		}
 		img := imageResponse{
 			ID:        s.newID(),
 			RoomID:    roomID,
 			URL:       payload.URL,
 			Status:    "done",
-			CreatedAt: time.Now(),
+			CreatedAt: time.Now().UTC(),
 			X:         x,
 			Y:         y,
 		}
-		s.storeImage(roomID, img)
-		s.broadcastSharedImage(roomID, img)
-		writeJSON(w, http.StatusCreated, img)
+		stored, err := s.storeImage(roomID, img)
+		if err != nil {
+			s.logger.Error("store image", slog.String("error", err.Error()))
+			http.Error(w, "failed to store image", http.StatusInternalServerError)
+			return
+		}
+		s.broadcastSharedImage(roomID, stored)
+		writeJSON(w, http.StatusCreated, stored)
 		return
 	}
 
@@ -382,19 +425,27 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		file.Close()
 
 		url := "/uploads/" + uniqueName
-		x, y := s.nextPosition(roomID)
+		x, y, err := s.nextPosition(roomID)
+		if err != nil {
+			http.Error(w, "failed to store image", http.StatusInternalServerError)
+			return
+		}
 		img := imageResponse{
 			ID:        s.newID(),
 			RoomID:    roomID,
 			URL:       url,
 			Status:    "done",
-			CreatedAt: time.Now(),
+			CreatedAt: time.Now().UTC(),
 			X:         x,
 			Y:         y,
 		}
-		s.storeImage(roomID, img)
-		uploaded = append(uploaded, img)
-		s.broadcastSharedImage(roomID, img)
+		stored, err := s.storeImage(roomID, img)
+		if err != nil {
+			http.Error(w, "failed to store image", http.StatusInternalServerError)
+			return
+		}
+		uploaded = append(uploaded, stored)
+		s.broadcastSharedImage(roomID, stored)
 	}
 
 	if len(uploaded) == 1 {
@@ -405,7 +456,12 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 }
 
 func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request, roomID, imageID string) {
-	img, ok := s.deleteImage(roomID, imageID)
+	img, ok, err := s.deleteImage(roomID, imageID)
+	if err != nil {
+		s.logger.Error("delete image", slog.String("error", err.Error()))
+		http.Error(w, "failed to delete image", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -431,7 +487,12 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
-	img, ok := s.updateImage(roomID, imageID, payload.X, payload.Y)
+	img, ok, err := s.updateImage(roomID, imageID, payload.X, payload.Y)
+	if err != nil {
+		s.logger.Error("update image", slog.String("error", err.Error()))
+		http.Error(w, "failed to update image", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -462,13 +523,12 @@ func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roo
 		return
 	}
 
-	ts := time.Now()
+	ts := time.Now().UTC()
 	if payload.Timestamp != nil {
 		ts = payload.Timestamp.UTC()
 	}
 
 	entry := diceLogEntry{
-		ID:          s.newID(),
 		Seed:        payload.Seed,
 		Count:       payload.Count,
 		Results:     append([]int{}, payload.Results...),
@@ -476,80 +536,136 @@ func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roo
 		Timestamp:   ts,
 	}
 
-	stored := s.storeDiceLog(roomID, entry)
+	stored, err := s.storeDiceLog(roomID, entry)
+	if err != nil {
+		s.logger.Error("store dice log", slog.String("error", err.Error()))
+		http.Error(w, "failed to store dice log", http.StatusInternalServerError)
+		return
+	}
 	s.broadcastDiceLog(roomID, stored)
 	writeJSON(w, http.StatusOK, stored)
 }
 
-func (s *Server) getImages(roomID string) []imageResponse {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	images := s.images[roomID]
-	if images == nil {
-		return []imageResponse{}
+func (s *Server) getImages(roomID string) ([]imageResponse, error) {
+	rows, err := s.db.Query(`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE room_id = ? ORDER BY created_at ASC, id ASC`, roomID)
+	if err != nil {
+		return nil, err
 	}
-	return append([]imageResponse{}, images...)
-}
+	defer rows.Close()
 
-func (s *Server) getDiceLogs(roomID string) []diceLogEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	logs := s.diceLogs[roomID]
-	if logs == nil {
-		return []diceLogEntry{}
-	}
-	return append([]diceLogEntry{}, logs...)
-}
-
-func (s *Server) storeImage(roomID string, img imageResponse) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.images[roomID] = append(s.images[roomID], img)
-}
-
-func sameResults(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	var images []imageResponse
+	for rows.Next() {
+		var img imageResponse
+		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y); err != nil {
+			return nil, err
 		}
+		img.CreatedAt = img.CreatedAt.UTC()
+		images = append(images, img)
 	}
-	return true
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return images, nil
 }
 
-func (s *Server) storeDiceLog(roomID string, entry diceLogEntry) diceLogEntry {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Server) getDiceLogs(roomID string) ([]diceLogEntry, error) {
+	rows, err := s.db.Query(`SELECT id, room_id, seed, count, results, triggered_by, timestamp FROM dice_logs WHERE room_id = ? ORDER BY timestamp DESC, id DESC LIMIT 50`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
+	var logs []diceLogEntry
+	for rows.Next() {
+		var entry diceLogEntry
+		var results string
+		if err := rows.Scan(&entry.ID, &entry.RoomID, &entry.Seed, &entry.Count, &results, &entry.TriggeredBy, &entry.Timestamp); err != nil {
+			return nil, err
+		}
+		entry.Timestamp = entry.Timestamp.UTC()
+		if err := json.Unmarshal([]byte(results), &entry.Results); err != nil {
+			return nil, err
+		}
+		logs = append(logs, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+func (s *Server) storeImage(roomID string, img imageResponse) (imageResponse, error) {
+	img.RoomID = roomID
+	if img.Status == "" {
+		img.Status = "done"
+	}
+	if img.CreatedAt.IsZero() {
+		img.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO images (id, room_id, url, status, created_at, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		img.ID, img.RoomID, img.URL, img.Status, img.CreatedAt, img.X, img.Y,
+	)
+	return img, err
+}
+
+func (s *Server) storeDiceLog(roomID string, entry diceLogEntry) (diceLogEntry, error) {
 	if entry.TriggeredBy == "" {
 		entry.TriggeredBy = "Okänd"
 	}
 	entry.Timestamp = entry.Timestamp.UTC()
+	entry.RoomID = roomID
+	resultsJSON, err := json.Marshal(entry.Results)
+	if err != nil {
+		return diceLogEntry{}, err
+	}
 
-	existing := s.diceLogs[roomID]
-	for _, log := range existing {
-		if log.Seed == entry.Seed && log.Count == entry.Count && sameResults(log.Results, entry.Results) {
-			return log
+	var existing diceLogEntry
+	var existingResults string
+	err = s.db.QueryRow(
+		`SELECT id, room_id, seed, count, results, triggered_by, timestamp FROM dice_logs WHERE room_id = ? AND seed = ? AND count = ? AND results = ? LIMIT 1`,
+		roomID, entry.Seed, entry.Count, string(resultsJSON),
+	).Scan(&existing.ID, &existing.RoomID, &existing.Seed, &existing.Count, &existingResults, &existing.TriggeredBy, &existing.Timestamp)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal([]byte(existingResults), &existing.Results); err != nil {
+			return diceLogEntry{}, err
 		}
+		existing.Timestamp = existing.Timestamp.UTC()
+		return existing, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return diceLogEntry{}, err
 	}
 
-	s.diceLogs[roomID] = append([]diceLogEntry{entry}, existing...)
-	if len(s.diceLogs[roomID]) > 50 {
-		s.diceLogs[roomID] = s.diceLogs[roomID][:50]
+	entry.ID = s.newID()
+	if _, err := s.db.Exec(
+		`INSERT INTO dice_logs (id, room_id, seed, count, results, triggered_by, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, roomID, entry.Seed, entry.Count, string(resultsJSON), entry.TriggeredBy, entry.Timestamp,
+	); err != nil {
+		return diceLogEntry{}, err
 	}
 
-	return entry
+	// Trim to latest 50 entries
+	if _, err := s.db.Exec(
+		`DELETE FROM dice_logs WHERE id IN (
+			SELECT id FROM dice_logs WHERE room_id = ? ORDER BY timestamp DESC, id DESC LIMIT -1 OFFSET 50
+		)`,
+		roomID,
+	); err != nil {
+		return diceLogEntry{}, err
+	}
+
+	return entry, nil
 }
 
-func (s *Server) nextPosition(roomID string) (float64, float64) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	count := len(s.images[roomID])
+func (s *Server) nextPosition(roomID string) (float64, float64, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM images WHERE room_id = ?`, roomID).Scan(&count); err != nil {
+		return 0, 0, err
+	}
 	offset := float64((count % 5) * 40)
 	row := float64((count / 5) * 40)
-	return offset, row
+	return offset, row, nil
 }
 
 func (s *Server) isGMActive(roomID string) bool {
@@ -559,109 +675,164 @@ func (s *Server) isGMActive(roomID string) bool {
 	return ok
 }
 
-func (s *Server) deleteImage(roomID, imageID string) (imageResponse, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	images := s.images[roomID]
-	for idx, img := range images {
-		if img.ID == imageID {
-			s.images[roomID] = append(images[:idx], images[idx+1:]...)
-			return img, true
-		}
+func (s *Server) deleteImage(roomID, imageID string) (imageResponse, bool, error) {
+	var img imageResponse
+	err := s.db.QueryRow(
+		`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE id = ? AND room_id = ?`,
+		imageID, roomID,
+	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y)
+	if errors.Is(err, sql.ErrNoRows) {
+		return imageResponse{}, false, nil
 	}
-	return imageResponse{}, false
+	if err != nil {
+		return imageResponse{}, false, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM images WHERE id = ? AND room_id = ?`, imageID, roomID); err != nil {
+		return imageResponse{}, false, err
+	}
+	return img, true, nil
 }
 
-func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageResponse, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	images := s.images[roomID]
-	for idx, img := range images {
-		if img.ID == imageID {
-			if x != nil {
-				img.X = *x
-			}
-			if y != nil {
-				img.Y = *y
-			}
-			s.images[roomID][idx] = img
-			return img, true
-		}
+func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageResponse, bool, error) {
+	var img imageResponse
+	err := s.db.QueryRow(
+		`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE id = ? AND room_id = ?`,
+		imageID, roomID,
+	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y)
+	if errors.Is(err, sql.ErrNoRows) {
+		return imageResponse{}, false, nil
 	}
-	return imageResponse{}, false
+	if err != nil {
+		return imageResponse{}, false, err
+	}
+	if x != nil {
+		img.X = *x
+	}
+	if y != nil {
+		img.Y = *y
+	}
+	if _, err := s.db.Exec(`UPDATE images SET x = ?, y = ? WHERE id = ? AND room_id = ?`, img.X, img.Y, imageID, roomID); err != nil {
+		return imageResponse{}, false, err
+	}
+	return img, true, nil
 }
 
-func (s *Server) createRoom(name, createdBy string) Room {
+func (s *Server) createRoom(name, createdBy string) (Room, error) {
 	if createdBy == "" {
 		createdBy = "anonymous"
 	}
-	room := Room{
-		ID:        s.newID(),
-		Slug:      s.newSlug(),
-		Name:      name,
-		CreatedBy: createdBy,
-		CreatedAt: time.Now().UTC(),
+
+	var room Room
+	for attempt := 0; attempt < 5; attempt++ {
+		slug, err := s.newSlug()
+		if err != nil {
+			return Room{}, err
+		}
+		room = Room{
+			ID:        s.newID(),
+			Slug:      slug,
+			Name:      name,
+			CreatedBy: createdBy,
+			CreatedAt: time.Now().UTC(),
+		}
+		result, err := s.db.Exec(
+			`INSERT OR IGNORE INTO rooms (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)`,
+			room.ID, room.Slug, room.Name, room.CreatedBy, room.CreatedAt,
+		)
+		if err != nil {
+			return Room{}, err
+		}
+		if rows, _ := result.RowsAffected(); rows > 0 {
+			return room, nil
+		}
 	}
 
-	s.mu.Lock()
-	s.rooms[room.ID] = room
-	s.roomsBySlug[room.Slug] = room.ID
-	s.mu.Unlock()
-
-	return room
+	return Room{}, errors.New("failed to generate unique room slug")
 }
 
-func (s *Server) listRooms() []Room {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rooms := make([]Room, 0, len(s.rooms))
-	for _, room := range s.rooms {
+func (s *Server) listRooms() ([]Room, error) {
+	rows, err := s.db.Query(`SELECT id, slug, name, created_by, created_at FROM rooms ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rooms []Room
+	for rows.Next() {
+		var room Room
+		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt); err != nil {
+			return nil, err
+		}
+		room.CreatedAt = room.CreatedAt.UTC()
 		rooms = append(rooms, room)
 	}
-	return rooms
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return rooms, nil
 }
 
-func (s *Server) getRoomBySlug(slug string) (Room, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	id, ok := s.roomsBySlug[slug]
-	if !ok {
-		return Room{}, false
+func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
+	var room Room
+	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE slug = ?`, slug).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Room{}, false, nil
 	}
-	room, ok := s.rooms[id]
-	return room, ok
+	if err != nil {
+		return Room{}, false, err
+	}
+	room.CreatedAt = room.CreatedAt.UTC()
+	return room, true, nil
 }
 
-func (s *Server) resolveRoomID(identifier string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if id, ok := s.roomsBySlug[identifier]; ok {
-		return id, true
+func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT id FROM rooms WHERE id = ?`, identifier).Scan(&id)
+	if err == nil {
+		return id, true, nil
 	}
-	if _, ok := s.rooms[identifier]; ok {
-		return identifier, true
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", false, err
 	}
-	return "", false
+	err = s.db.QueryRow(`SELECT id FROM rooms WHERE slug = ?`, identifier).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
 }
 
 func (s *Server) newID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func (s *Server) newSlug() string {
-	for {
+func (s *Server) newSlug() (string, error) {
+	for attempt := 0; attempt < 10; attempt++ {
 		buf := make([]byte, 6)
 		if _, err := rand.Read(buf); err != nil {
-			return strconv.FormatInt(time.Now().UnixNano(), 36)
+			return strconv.FormatInt(time.Now().UnixNano(), 36), nil
 		}
 		slug := base64.RawURLEncoding.EncodeToString(buf)
-		s.mu.RLock()
-		_, exists := s.roomsBySlug[slug]
-		s.mu.RUnlock()
+		exists, err := s.slugExists(slug)
+		if err != nil {
+			return "", err
+		}
 		if !exists {
-			return slug
+			return slug, nil
 		}
 	}
+	return "", errors.New("unable to generate unique slug")
+}
+
+func (s *Server) slugExists(slug string) (bool, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(1) FROM rooms WHERE slug = ?`, slug).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 type wsConn struct {
@@ -754,11 +925,17 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing room id", http.StatusBadRequest)
 		return
 	}
-	roomID, ok := s.resolveRoomID(roomID)
+	resolvedRoomID, ok, err := s.resolveRoomID(roomID)
+	if err != nil {
+		s.logger.Error("resolve room for websocket", slog.String("error", err.Error()))
+		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.Error(w, "room not found", http.StatusNotFound)
 		return
 	}
+	roomID = resolvedRoomID
 
 	origin := r.Header.Get("Origin")
 	allowedOrigin := s.matchOrigin(origin)

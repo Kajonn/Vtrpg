@@ -41,10 +41,14 @@ func newTestServer(t *testing.T, uploadDir string) *Server {
 	cfg := LoadConfig()
 	cfg.UploadDir = uploadDir
 	cfg.FrontendDir = uploadDir
+	cfg.DBPath = filepath.Join(uploadDir, "test.db")
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = srv.Close()
+	})
 	return srv
 }
 
@@ -120,6 +124,56 @@ func TestRoomRoutesRejectUnknownRooms(t *testing.T) {
 	router.ServeHTTP(wsW, wsReq)
 	if wsW.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for unknown room websocket, got %d", wsW.Code)
+	}
+}
+
+func TestRoomPersistenceAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServer(t, dir)
+	router := srv.Router()
+
+	body, _ := json.Marshal(map[string]string{"name": "Persistent Room"})
+	createReq := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+	createW := httptest.NewRecorder()
+	router.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", createW.Code)
+	}
+	var created Room
+	_ = json.NewDecoder(createW.Body).Decode(&created)
+	if created.ID == "" || created.Slug == "" {
+		t.Fatalf("expected room to have id and slug, got %+v", created)
+	}
+
+	// Close the first server to simulate a restart.
+	_ = srv.Close()
+
+	// Start a new server using the same database path.
+	srv2 := newTestServer(t, dir)
+	router2 := srv2.Router()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/rooms", nil)
+	listW := httptest.NewRecorder()
+	router2.ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("expected 200 listing rooms after restart, got %d", listW.Code)
+	}
+	var rooms []Room
+	_ = json.NewDecoder(listW.Body).Decode(&rooms)
+	if len(rooms) != 1 || rooms[0].ID != created.ID {
+		t.Fatalf("expected persisted room %+v, got %+v", created, rooms)
+	}
+
+	lookupReq := httptest.NewRequest(http.MethodGet, "/rooms/slug/"+created.Slug, nil)
+	lookupW := httptest.NewRecorder()
+	router2.ServeHTTP(lookupW, lookupReq)
+	if lookupW.Code != http.StatusOK {
+		t.Fatalf("expected 200 when looking up persisted room, got %d", lookupW.Code)
+	}
+	var lookedUp Room
+	_ = json.NewDecoder(lookupW.Body).Decode(&lookedUp)
+	if lookedUp.ID != created.ID {
+		t.Fatalf("expected persisted room id %s, got %s", created.ID, lookedUp.ID)
 	}
 }
 
