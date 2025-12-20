@@ -3,14 +3,17 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -33,38 +36,62 @@ type nopFile struct {
 
 func (nopFile) Close() error { return nil }
 
+func newTestServer(t *testing.T, uploadDir string) *Server {
+	t.Helper()
+	cfg := LoadConfig()
+	cfg.UploadDir = uploadDir
+	cfg.FrontendDir = uploadDir
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	return srv
+}
+
 func TestRoomAndImageLifecycle(t *testing.T) {
-	app, _ := NewApp(t.TempDir())
-	gm := User{ID: "gm", Role: RoleGM, Token: "token-gm"}
-	app.tokens[gm.Token] = gm
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
 
 	// create room
 	body, _ := json.Marshal(map[string]string{"name": "Test"})
 	req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+gm.Token)
 	w := httptest.NewRecorder()
-	app.Router().ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", w.Code)
 	}
 	var room Room
 	_ = json.NewDecoder(w.Body).Decode(&room)
+	if room.Slug == "" {
+		t.Fatalf("expected slug to be set")
+	}
 
-	// upload image via URL
+	lookupReq := httptest.NewRequest(http.MethodGet, "/rooms/slug/"+room.Slug, nil)
+	lw := httptest.NewRecorder()
+	router.ServeHTTP(lw, lookupReq)
+	if lw.Code != http.StatusOK {
+		t.Fatalf("expected 200 from lookup, got %d", lw.Code)
+	}
+	var lookedUp Room
+	_ = json.NewDecoder(lw.Body).Decode(&lookedUp)
+	if lookedUp.ID != room.ID {
+		t.Fatalf("expected lookup id %s, got %s", room.ID, lookedUp.ID)
+	}
+
+	// upload image via URL using slug resolution
 	imgBody, _ := json.Marshal(map[string]any{"url": "https://example.com/img.png"})
-	imgReq := httptest.NewRequest(http.MethodPost, "/rooms/"+room.ID+"/images", bytes.NewReader(imgBody))
-	imgReq.Header.Set("Authorization", "Bearer "+gm.Token)
+	imgReq := httptest.NewRequest(http.MethodPost, "/rooms/"+room.Slug+"/images", bytes.NewReader(imgBody))
+	imgReq.Header.Set("Content-Type", "application/json")
 	iw := httptest.NewRecorder()
-	app.Router().ServeHTTP(iw, imgReq)
+	router.ServeHTTP(iw, imgReq)
 	if iw.Code != http.StatusCreated {
 		t.Fatalf("expected 201 from image upload, got %d", iw.Code)
 	}
 
 	// list
-	listReq := httptest.NewRequest(http.MethodGet, "/rooms/"+room.ID+"/images", nil)
-	listReq.Header.Set("Authorization", "Bearer "+gm.Token)
-	lw := httptest.NewRecorder()
-	app.Router().ServeHTTP(lw, listReq)
+	listReq := httptest.NewRequest(http.MethodGet, "/rooms/"+room.Slug+"/images", nil)
+	lw = httptest.NewRecorder()
+	router.ServeHTTP(lw, listReq)
 	if lw.Code != http.StatusOK {
 		t.Fatalf("expected 200 from list, got %d", lw.Code)
 	}
@@ -75,11 +102,30 @@ func TestRoomAndImageLifecycle(t *testing.T) {
 	}
 }
 
+func TestRoomRoutesRejectUnknownRooms(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+
+	unknownSlug := "missing-room"
+
+	listReq := httptest.NewRequest(http.MethodGet, "/rooms/"+unknownSlug+"/images", nil)
+	listW := httptest.NewRecorder()
+	router.ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown room images, got %d", listW.Code)
+	}
+
+	wsReq := httptest.NewRequest(http.MethodGet, "/ws/rooms/"+unknownSlug, nil)
+	wsW := httptest.NewRecorder()
+	router.ServeHTTP(wsW, wsReq)
+	if wsW.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown room websocket, got %d", wsW.Code)
+	}
+}
+
 func TestWebsocketBroadcast(t *testing.T) {
 	uploadDir := t.TempDir()
-	app, _ := NewApp(uploadDir)
-	gm := User{ID: "gm", Role: RoleGM, Token: "token-gm"}
-	app.tokens[gm.Token] = gm
+	app := newTestServer(t, uploadDir)
 
 	srv := httptest.NewServer(app.Router())
 	defer srv.Close()
@@ -87,7 +133,6 @@ func TestWebsocketBroadcast(t *testing.T) {
 	// create room
 	body, _ := json.Marshal(map[string]string{"name": "WS Room"})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/rooms", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+gm.Token)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatalf("create room: %v", err)
@@ -96,17 +141,63 @@ func TestWebsocketBroadcast(t *testing.T) {
 	var room Room
 	_ = json.NewDecoder(resp.Body).Decode(&room)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	streamReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/ws/rooms/"+room.ID, nil)
-	streamReq.Header.Set("Authorization", "Bearer "+gm.Token)
-	streamResp, err := srv.Client().Do(streamReq)
+	serverURL, _ := url.Parse(srv.URL)
+	conn, err := net.Dial("tcp", serverURL.Host)
 	if err != nil {
-		t.Fatalf("open stream: %v", err)
+		t.Fatalf("dial server: %v", err)
 	}
-	defer streamResp.Body.Close()
-	reader := bufio.NewReader(streamResp.Body)
+	t.Cleanup(func() { conn.Close() })
+
+	key := make([]byte, 16)
+	_, _ = rand.Read(key)
+	encodedKey := base64.StdEncoding.EncodeToString(key)
+	fmt.Fprintf(conn, "GET /ws/rooms/%s?name=test HTTP/1.1\r\n", room.Slug)
+	fmt.Fprintf(conn, "Host: %s\r\n", serverURL.Host)
+	fmt.Fprint(conn, "Upgrade: websocket\r\n")
+	fmt.Fprint(conn, "Connection: Upgrade\r\n")
+	fmt.Fprintf(conn, "Sec-WebSocket-Key: %s\r\n", encodedKey)
+	fmt.Fprint(conn, "Sec-WebSocket-Version: 13\r\n\r\n")
+
+	respResp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("handshake response: %v", err)
+	}
+	if respResp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("unexpected handshake status: %d", respResp.StatusCode)
+	}
+
+	recvCh := make(chan SharedImage, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		for {
+			opcode, payload, err := readFrame(conn)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if opcode != 0x1 {
+				continue
+			}
+			var envelope struct {
+				Type    string          `json:"type"`
+				Payload json.RawMessage `json:"payload"`
+			}
+			if err := json.Unmarshal(payload, &envelope); err != nil {
+				errCh <- err
+				return
+			}
+			if envelope.Type != "SharedImage" {
+				continue
+			}
+			var recv SharedImage
+			if err := json.Unmarshal(envelope.Payload, &recv); err != nil {
+				errCh <- err
+				return
+			}
+			recvCh <- recv
+			return
+		}
+	}()
 
 	// upload via file
 	filePath := filepath.Join(uploadDir, "test.png")
@@ -119,9 +210,8 @@ func TestWebsocketBroadcast(t *testing.T) {
 	part.Write(data)
 	mw.Close()
 
-	uploadReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/rooms/"+room.ID+"/images", buf)
+	uploadReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/rooms/"+room.Slug+"/images", buf)
 	uploadReq.Header.Set("Content-Type", mw.FormDataContentType())
-	uploadReq.Header.Set("Authorization", "Bearer "+gm.Token)
 
 	t.Log("sending upload request")
 	uploadResp, err := srv.Client().Do(uploadReq)
@@ -134,27 +224,6 @@ func TestWebsocketBroadcast(t *testing.T) {
 	uploadResp.Body.Close()
 
 	t.Log("waiting for event")
-	recvCh := make(chan SharedImage, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				errCh <- err
-				return
-			}
-			if strings.HasPrefix(line, "data: ") {
-				var recv SharedImage
-				if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data: "))), &recv); err != nil {
-					errCh <- err
-					return
-				}
-				recvCh <- recv
-				return
-			}
-		}
-	}()
-
 	select {
 	case recv := <-recvCh:
 		if recv.RoomID != room.ID {
