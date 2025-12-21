@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
 import Canvas from './Canvas.jsx';
 
@@ -11,6 +11,7 @@ const fetchImages = async (roomId) => {
 const Room = ({
   roomId,
   user,
+  roomSlug,
   images,
   participants,
   onImagesUpdate,
@@ -24,7 +25,13 @@ const Room = ({
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
   const isGM = user.role === 'gm';
+
+  const shareUrl = useMemo(() => {
+    const identifier = roomSlug || roomId;
+    return `${window.location.origin}/room/${identifier}`;
+  }, [roomId, roomSlug]);
 
   useEffect(() => {
     setLoading(true);
@@ -130,6 +137,17 @@ const Room = ({
     }
   };
 
+  const handleCopyInvite = async () => {
+    setCopyStatus('');
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopyStatus('Länken kopierades.');
+      setTimeout(() => setCopyStatus(''), 2000);
+    } catch (err) {
+      setCopyStatus('Kunde inte kopiera länken.');
+    }
+  };
+
   return (
     <section className="room">
       {uploading.length > 0 && (
@@ -206,8 +224,16 @@ const Room = ({
       </footer>
 
       <div className="room-footer">
-        <div>
-          <strong>Room: {roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
+        <div className="room-footer__info">
+          <strong>Room: {roomSlug || roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
+          <div className="invite-link invite-link--inline">
+            <span>Dela: </span>
+            <code>{shareUrl}</code>
+            <button type="button" className="ghost-button" onClick={handleCopyInvite}>
+              Kopiera länk
+            </button>
+          </div>
+          {copyStatus && <p className="muted">{copyStatus}</p>}
         </div>
         <button type="button" className="ghost-button" onClick={onLogout}>
           Logga ut
@@ -240,6 +266,7 @@ Room.propTypes = {
     x: PropTypes.number,
     y: PropTypes.number,
   })).isRequired,
+  roomSlug: PropTypes.string,
   onImagesUpdate: PropTypes.func.isRequired,
   onDiceLogUpdate: PropTypes.func,
   onLogout: PropTypes.func.isRequired,
