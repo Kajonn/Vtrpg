@@ -320,6 +320,10 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
 	parts := strings.Split(trimmed, "/")
 	if len(parts) < 2 || parts[0] == "" {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			s.spaHandler().ServeHTTP(w, r)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
