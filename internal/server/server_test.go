@@ -37,6 +37,79 @@ type nopFile struct {
 
 func (nopFile) Close() error { return nil }
 
+type sequenceReader struct {
+	sequences [][]byte
+	index     int
+}
+
+func (r *sequenceReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if r.index >= len(r.sequences) {
+		for i := range p {
+			p[i] = byte(r.index + i)
+		}
+		return len(p), nil
+	}
+	copy(p, r.sequences[r.index])
+	r.index++
+	return len(p), nil
+}
+
+func TestCreateRoomSlugUniqueness(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServer(t, dir)
+
+	collisionBytes := []byte{1, 2, 3, 4, 5, 6}
+	collisionSlug := base64.RawURLEncoding.EncodeToString(collisionBytes)
+	_, err := srv.db.Exec(`INSERT INTO rooms (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"existing", collisionSlug, "Existing", "tester", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("seed collision slug: %v", err)
+	}
+
+	originalReader := rand.Reader
+	rand.Reader = &sequenceReader{
+		sequences: [][]byte{
+			collisionBytes,                 // first attempt collides
+			[]byte{9, 9, 9, 9, 9, 9, 9, 9}, // second attempt succeeds
+		},
+	}
+	t.Cleanup(func() { rand.Reader = originalReader })
+
+	room, err := srv.createRoom("New Room", "tester")
+	if err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+	if room.Slug == collisionSlug {
+		t.Fatalf("expected new slug after collision, got %s", room.Slug)
+	}
+
+	var slugs []string
+	rows, err := srv.db.Query(`SELECT slug FROM rooms ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		t.Fatalf("query slugs: %v", err)
+	}
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			t.Fatalf("scan slug: %v", err)
+		}
+		slugs = append(slugs, slug)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows error: %v", err)
+	}
+	slugSet := make(map[string]struct{})
+	for _, slug := range slugs {
+		if _, exists := slugSet[slug]; exists {
+			t.Fatalf("duplicate slug detected: %s", slug)
+		}
+		slugSet[slug] = struct{}{}
+	}
+}
+
 func newTestServerWithConfig(t *testing.T, uploadDir string, mutate func(*Config)) *Server {
 	t.Helper()
 	cfg := LoadConfig()
@@ -151,6 +224,31 @@ func TestRoomJoinValidation(t *testing.T) {
 		fullRouter.ServeHTTP(w2, req2)
 		if w2.Code != http.StatusConflict {
 			t.Fatalf("expected 409 when room is full, got %d", w2.Code)
+		}
+	})
+
+	t.Run("missing slug", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"slug": "  ", "name": "Player Three"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 when slug is missing, got %d", w.Code)
+		}
+	})
+
+	t.Run("unsupported role", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Player Four", "role": "gm"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for unsupported role, got %d", w.Code)
+		}
+		var resp map[string]string
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] == "" {
+			t.Fatalf("expected error message for unsupported role")
 		}
 	})
 }
@@ -276,6 +374,36 @@ func TestRoomRoutesRejectUnknownRooms(t *testing.T) {
 	if wsW.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for unknown room websocket, got %d", wsW.Code)
 	}
+}
+
+func TestRoomLookupBySlug(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+
+	room := createRoomForTest(t, router)
+
+	t.Run("returns room", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/slug/"+room.Slug, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var payload Room
+		_ = json.NewDecoder(w.Body).Decode(&payload)
+		if payload.ID != room.ID || payload.Slug != room.Slug {
+			t.Fatalf("unexpected room payload: %+v", payload)
+		}
+	})
+
+	t.Run("missing slug segment", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/slug/", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 for missing slug, got %d", w.Code)
+		}
+	})
 }
 
 func TestRoomPersistenceAcrossRestarts(t *testing.T) {
