@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"database/sql"
@@ -19,8 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"log/slog"
+	"regexp"
 	"sync"
 )
 
@@ -87,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
+	s.mux.HandleFunc("/rooms/join", s.handleRoomJoin)
 	s.mux.HandleFunc("/rooms", s.handleRooms)
 	s.mux.HandleFunc("/rooms/slug/", s.handleRoomLookup)
 	s.mux.HandleFunc("/rooms/", s.handleRoom)
@@ -245,6 +249,71 @@ func (s *Server) handleRoomLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, room)
+}
+
+func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	slug := strings.TrimSpace(payload.Slug)
+	name := strings.TrimSpace(payload.Name)
+	role := strings.ToLower(strings.TrimSpace(payload.Role))
+	if role == "" {
+		role = string(RolePlayer)
+	}
+
+	if slug == "" {
+		http.Error(w, "room slug is required", http.StatusBadRequest)
+		return
+	}
+
+	if !isValidName(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be 2-32 characters and include only letters, numbers, spaces, hyphens, underscores, or apostrophes"})
+		return
+	}
+	if role != string(RolePlayer) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only player role is supported when joining"})
+		return
+	}
+
+	room, ok, err := s.getRoomBySlug(slug)
+	if err != nil {
+		s.logger.Error("lookup room for join", slog.String("error", err.Error()))
+		http.Error(w, "failed to lookup room", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "room not found"})
+		return
+	}
+
+	player, err := s.createPlayer(room.ID, name, Role(role))
+	if errors.Is(err, errRoomFull) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "room full"})
+		return
+	}
+	if err != nil {
+		s.logger.Error("create player", slog.String("error", err.Error()))
+		http.Error(w, "failed to join room", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"roomId":   room.ID,
+		"roomSlug": room.Slug,
+		"player":   player,
+	})
 }
 
 func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
@@ -809,6 +878,14 @@ func (s *Server) newID() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
+func (s *Server) newToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
 func (s *Server) newSlug() (string, error) {
 	for attempt := 0; attempt < 10; attempt++ {
 		buf := make([]byte, 6)
@@ -833,6 +910,64 @@ func (s *Server) slugExists(slug string) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+func (s *Server) createPlayer(roomID, name string, role Role) (Player, error) {
+	token, err := s.newToken()
+	if err != nil {
+		return Player{}, err
+	}
+	player := Player{
+		ID:        s.newID(),
+		RoomID:    roomID,
+		Name:      name,
+		Role:      role,
+		Token:     token,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	result, err := s.db.ExecContext(
+		context.Background(),
+		`INSERT INTO players (id, room_id, name, token, role, created_at)
+			SELECT ?, ?, ?, ?, ?, ?
+			WHERE (SELECT COUNT(1) FROM players WHERE room_id = ?) < ?;`,
+		player.ID, player.RoomID, player.Name, player.Token, player.Role, player.CreatedAt,
+		roomID, s.cfg.MaxPlayersPerRoom,
+	)
+	if err != nil {
+		return Player{}, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return Player{}, err
+	}
+	if rowsAffected == 0 {
+		return Player{}, errRoomFull
+	}
+
+	return player, nil
+}
+
+func (s *Server) countPlayers(roomID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM players WHERE room_id = ?`, roomID).Scan(&count)
+	return count, err
+}
+
+var (
+	errRoomFull = errors.New("room full")
+	namePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
+)
+
+func isValidName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if !namePattern.MatchString(name) {
+		return false
+	}
+	return utf8.RuneCountInString(name) >= 2 && utf8.RuneCountInString(name) <= 32
 }
 
 type wsConn struct {
