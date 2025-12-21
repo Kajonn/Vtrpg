@@ -250,6 +250,8 @@ Room.propTypes = {
   user: PropTypes.shape({
     name: PropTypes.string.isRequired,
     role: PropTypes.string.isRequired,
+    id: PropTypes.string,
+    token: PropTypes.string,
   }).isRequired,
   participants: PropTypes.arrayOf(
     PropTypes.shape({

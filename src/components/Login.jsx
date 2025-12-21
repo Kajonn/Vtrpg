@@ -42,8 +42,8 @@ const Login = ({ onLogin, defaultRoom, onRoomChange, buildInviteUrl }) => {
 
     if (!gmCheckPassed) return;
 
-    onLogin({ name, role });
-    onRoomChange(room);
+    onLogin({ name, role }, room);
+    onRoomChange?.(room);
   };
 
   const handleCreateRoom = async () => {
@@ -69,7 +69,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange, buildInviteUrl }) => {
         throw new Error('Kunde inte hämta rums-ID.');
       }
       setRoom(slug);
-      onRoomChange(slug);
+      onRoomChange?.(slug);
       if (buildInviteUrl) {
         setInviteLink(buildInviteUrl(slug));
       }
@@ -165,7 +165,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange, buildInviteUrl }) => {
 Login.propTypes = {
   onLogin: PropTypes.func.isRequired,
   defaultRoom: PropTypes.string,
-  onRoomChange: PropTypes.func.isRequired,
+  onRoomChange: PropTypes.func,
   buildInviteUrl: PropTypes.func,
 };
 
