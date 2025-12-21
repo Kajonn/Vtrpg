@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -152,6 +153,54 @@ func TestRoomJoinValidation(t *testing.T) {
 			t.Fatalf("expected 409 when room is full, got %d", w2.Code)
 		}
 	})
+}
+
+func TestRoomJoinCapacityIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	srv := newTestServerWithConfig(t, dir, func(cfg *Config) {
+		cfg.MaxPlayersPerRoom = 1
+	})
+	router := srv.Router()
+	room := createRoomForTest(t, router)
+
+	var wg sync.WaitGroup
+	statuses := make(chan int, 2)
+	for _, name := range []string{"First", "Second"} {
+		wg.Add(1)
+		go func(n string) {
+			defer wg.Done()
+			body, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": n})
+			req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			statuses <- w.Code
+		}(name)
+	}
+	wg.Wait()
+	close(statuses)
+
+	var created, conflicts int
+	for code := range statuses {
+		switch code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("unexpected status code: %d", code)
+		}
+	}
+	if created != 1 || conflicts != 1 {
+		t.Fatalf("expected one successful join and one conflict, got created=%d conflicts=%d", created, conflicts)
+	}
+
+	count, err := srv.countPlayers(room.ID)
+	if err != nil {
+		t.Fatalf("failed to count players: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one player to be stored, got %d", count)
+	}
 }
 
 func TestRoomAndImageLifecycle(t *testing.T) {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"database/sql"
@@ -297,18 +298,11 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	playerCount, err := s.countPlayers(room.ID)
-	if err != nil {
-		s.logger.Error("count room players", slog.String("error", err.Error()))
-		http.Error(w, "failed to validate capacity", http.StatusInternalServerError)
-		return
-	}
-	if playerCount >= s.cfg.MaxPlayersPerRoom {
+	player, err := s.createPlayer(room.ID, name, Role(role))
+	if errors.Is(err, errRoomFull) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "room full"})
 		return
 	}
-
-	player, err := s.createPlayer(room.ID, name, Role(role))
 	if err != nil {
 		s.logger.Error("create player", slog.String("error", err.Error()))
 		http.Error(w, "failed to join room", http.StatusInternalServerError)
@@ -931,13 +925,27 @@ func (s *Server) createPlayer(roomID, name string, role Role) (Player, error) {
 		Token:     token,
 		CreatedAt: time.Now().UTC(),
 	}
-	_, err = s.db.Exec(
-		`INSERT INTO players (id, room_id, name, token, role, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+
+	result, err := s.db.ExecContext(
+		context.Background(),
+		`INSERT INTO players (id, room_id, name, token, role, created_at)
+			SELECT ?, ?, ?, ?, ?, ?
+			WHERE (SELECT COUNT(1) FROM players WHERE room_id = ?) < ?;`,
 		player.ID, player.RoomID, player.Name, player.Token, player.Role, player.CreatedAt,
+		roomID, s.cfg.MaxPlayersPerRoom,
 	)
 	if err != nil {
 		return Player{}, err
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return Player{}, err
+	}
+	if rowsAffected == 0 {
+		return Player{}, errRoomFull
+	}
+
 	return player, nil
 }
 
@@ -947,7 +955,10 @@ func (s *Server) countPlayers(roomID string) (int, error) {
 	return count, err
 }
 
-var namePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
+var (
+	errRoomFull = errors.New("room full")
+	namePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
+)
 
 func isValidName(name string) bool {
 	if name == "" {
