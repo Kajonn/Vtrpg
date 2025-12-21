@@ -25,6 +25,34 @@
   gap: 0.5rem;
 }
 
+.page {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.page__form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.page__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.page__actions button {
+  width: auto;
+}
+
+.muted {
+  color: #94a3b8;
+  margin: 0;
+}
+
 .card input,
 .card select,
 .card button,

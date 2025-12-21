@@ -37,8 +37,8 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
 
     if (!gmCheckPassed) return;
 
-    onLogin({ name, role });
-    onRoomChange(room);
+    onLogin({ name, role }, room);
+    onRoomChange?.(room);
   };
 
   return (
@@ -80,7 +80,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
 Login.propTypes = {
   onLogin: PropTypes.func.isRequired,
   defaultRoom: PropTypes.string,
-  onRoomChange: PropTypes.func.isRequired,
+  onRoomChange: PropTypes.func,
 };
 
 export default Login;

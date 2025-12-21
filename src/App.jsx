@@ -1,11 +1,34 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
+import JoinBySlug from './components/JoinBySlug.jsx';
 import './App.css';
+
+const loadPersistedSession = () => {
+  if (typeof localStorage === 'undefined') return null;
+  const persisted = localStorage.getItem('vtrpg.session');
+  if (!persisted) return null;
+  try {
+    const parsed = JSON.parse(persisted);
+    if (parsed?.user?.name && parsed?.user?.role && parsed?.roomId) {
+      return {
+        roomId: parsed.roomId,
+        roomSlug: parsed.roomSlug || parsed.roomId,
+        user: parsed.user,
+        playerId: parsed.playerId,
+        playerToken: parsed.playerToken,
+      };
+    }
+  } catch (err) {
+    console.error('Failed to parse persisted session', err);
+  }
+  return null;
+};
 
 const useWebSocket = (roomId, user, onMessage, onError) => {
   const [socket, setSocket] = useState(null);
-  
+
   useEffect(() => {
     if (!roomId || !user?.role || !user?.name) {
       setSocket(null);
@@ -42,13 +65,55 @@ const useWebSocket = (roomId, user, onMessage, onError) => {
       setSocket(null);
     };
   }, [roomId, user?.role, user?.name, onMessage, onError]);
-  
+
   return socket;
 };
 
+const RoomRoute = ({
+  session,
+  participants,
+  images,
+  onImagesUpdate,
+  onDiceLogUpdate,
+  onLogout,
+  diceRoll,
+  onSendDiceRoll,
+  diceLog,
+  onDiceResult,
+}) => {
+  const { roomIdentifier } = useParams();
+  if (!session?.roomId || !session?.user) {
+    return <Navigate to={`/room/${roomIdentifier}`} replace />;
+  }
+
+  const slugMatch = session.roomSlug && roomIdentifier === session.roomSlug;
+  const idMatch = roomIdentifier === session.roomId;
+  if (!slugMatch && !idMatch && session.roomSlug) {
+    return <Navigate to={`/rooms/${session.roomSlug}`} replace />;
+  }
+
+  return (
+    <Room
+      roomId={session.roomId}
+      user={session.user}
+      images={images}
+      participants={participants}
+      onLogout={onLogout}
+      onImagesUpdate={onImagesUpdate}
+      onDiceLogUpdate={onDiceLogUpdate}
+      diceRoll={diceRoll}
+      onSendDiceRoll={onSendDiceRoll}
+      diceLog={diceLog}
+      onDiceResult={onDiceResult}
+    />
+  );
+};
+
+const initialSession = loadPersistedSession();
+
 const App = () => {
-  const [user, setUser] = useState(null);
-  const [roomId, setRoomId] = useState('alpha');
+  const [session, setSession] = useState(initialSession);
+  const [roomSelection, setRoomSelection] = useState(() => initialSession?.roomSlug || initialSession?.roomId || 'alpha');
   const [sharedImages, setSharedImages] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [connectionError, setConnectionError] = useState('');
@@ -56,28 +121,52 @@ const App = () => {
   const [diceLog, setDiceLog] = useState([]);
   const diceChannelRef = useRef(null);
 
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const user = session?.user || null;
+  const roomId = session?.roomId || '';
+  const roomSlug = session?.roomSlug || '';
+
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    if (!user?.name || !user?.role || !roomId) {
+      localStorage.removeItem('vtrpg.session');
+      return;
+    }
+    const payload = {
+      ...session,
+      roomSlug: roomSlug || roomId,
+    };
+    localStorage.setItem('vtrpg.session', JSON.stringify(payload));
+  }, [session, user?.name, user?.role, roomId, roomSlug]);
+
+  useEffect(() => {
+    if (session?.roomSlug || session?.roomId) {
+      setRoomSelection(session.roomSlug || session.roomId);
+    }
+  }, [session?.roomSlug, session?.roomId]);
+
+  useEffect(() => {
+    if (session?.roomId && location.pathname === '/') {
+      navigate(`/rooms/${roomSlug || roomId}`, { replace: true });
+    }
+  }, [session?.roomId, roomSlug, roomId, location.pathname, navigate]);
+
+  useEffect(() => {
+    setConnectionError('');
+    setParticipants([]);
+    setDiceLog([]);
+  }, [roomId, user?.id, user?.role, user?.name]);
+
   const handleLogout = useCallback(() => {
-    setUser(null);
+    setSession(null);
     setSharedImages([]);
     setParticipants([]);
     setDiceLog([]);
     setConnectionError('');
-    localStorage.removeItem('vtrpg.session');
-  }, []);
-
-  useEffect(() => {
-    const persisted = localStorage.getItem('vtrpg.session');
-    if (!persisted) return;
-    try {
-      const parsed = JSON.parse(persisted);
-      if (parsed?.user?.name && parsed?.user?.role && parsed?.roomId) {
-        setUser(parsed.user);
-        setRoomId(parsed.roomId);
-      }
-    } catch (err) {
-      console.error('Failed to parse persisted session', err);
-    }
-  }, []);
+    navigate('/');
+  }, [navigate]);
 
   const handleMessage = useCallback((message) => {
     if (message?.type === 'SharedImage') {
@@ -153,23 +242,9 @@ const App = () => {
   );
 
   useEffect(() => {
-    setConnectionError('');
-    setParticipants([]);
-    setDiceLog([]);
-  }, [roomId, user]);
+    if (typeof BroadcastChannel === 'undefined' || !roomId) return undefined;
 
-  useEffect(() => {
-    if (user?.name && user?.role) {
-      localStorage.setItem('vtrpg.session', JSON.stringify({ user, roomId }));
-    } else {
-      localStorage.removeItem('vtrpg.session');
-    }
-  }, [user, roomId]);
-
-  useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return undefined;
-
-    const channelName = `vtrpg-dice-${roomId || 'default'}`;
+    const channelName = `vtrpg-dice-${roomId}`;
     const channel = new BroadcastChannel(channelName);
     channel.onmessage = (event) => {
       if (event.data?.type === 'DiceRoll' && event.data?.payload) {
@@ -188,29 +263,84 @@ const App = () => {
     };
   }, [roomId]);
 
+  const handleJoinSuccess = useCallback((payload, slug) => {
+    if (!payload?.roomId || !payload?.player) return;
+    const roomIdentifier = payload.roomSlug || slug || payload.roomId;
+    const nextSession = {
+      roomId: payload.roomId,
+      roomSlug: roomIdentifier,
+      user: {
+        name: payload.player.name,
+        role: payload.player.role || 'player',
+        id: payload.player.id,
+        token: payload.player.token,
+      },
+      playerId: payload.player.id,
+      playerToken: payload.player.token,
+    };
+    setSession(nextSession);
+    setRoomSelection(roomIdentifier);
+    setSharedImages([]);
+    setParticipants([]);
+    setDiceLog([]);
+    setConnectionError('');
+  }, []);
+
+  const handleLegacyLogin = useCallback((profile, room) => {
+    const trimmedRoom = (room || roomSelection || 'alpha').trim() || 'alpha';
+    setRoomSelection(trimmedRoom);
+    const nextSession = {
+      roomId: trimmedRoom,
+      roomSlug: trimmedRoom,
+      user: profile,
+    };
+    setSession(nextSession);
+    setConnectionError('');
+    setSharedImages([]);
+    setParticipants([]);
+    setDiceLog([]);
+  }, [roomSelection]);
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <h3>Virtual TTRPG Board</h3>
       </header>
-      {connectionError && <p className="error">{connectionError}</p>}
-      {!user ? (
-        <Login onLogin={(profile) => setUser(profile)} defaultRoom={roomId} onRoomChange={setRoomId} />
-      ) : (
-        <Room
-          roomId={roomId}
-          user={user}
-          images={sortedImages}
-          participants={participants}
-          onLogout={handleLogout}
-          onImagesUpdate={setSharedImages}
-          onDiceLogUpdate={setDiceLog}
-          diceRoll={diceRoll}
-          onSendDiceRoll={sendDiceRoll}
-          diceLog={diceLog}
-          onDiceResult={handleDiceResult}
+      {connectionError && session?.user && <p className="error">{connectionError}</p>}
+      <Routes>
+        <Route
+          path="/"
+          element={
+            session?.roomId ? (
+              <Navigate to={`/rooms/${roomSlug || roomId}`} replace />
+            ) : (
+              <Login onLogin={handleLegacyLogin} defaultRoom={roomSelection} onRoomChange={setRoomSelection} />
+            )
+          }
         />
-      )}
+        <Route
+          path="/room/:slug"
+          element={<JoinBySlug onJoinSuccess={handleJoinSuccess} existingSession={session} />}
+        />
+        <Route
+          path="/rooms/:roomIdentifier"
+          element={(
+            <RoomRoute
+              session={session}
+              participants={participants}
+              images={sortedImages}
+              onImagesUpdate={setSharedImages}
+              onDiceLogUpdate={setDiceLog}
+              onLogout={handleLogout}
+              diceRoll={diceRoll}
+              onSendDiceRoll={sendDiceRoll}
+              diceLog={diceLog}
+              onDiceResult={handleDiceResult}
+            />
+          )}
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
   );
 };
