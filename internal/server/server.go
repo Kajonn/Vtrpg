@@ -553,7 +553,7 @@ func (s *Server) getImages(roomID string) ([]imageResponse, error) {
 	}
 	defer rows.Close()
 
-	var images []imageResponse
+	images := make([]imageResponse, 0)
 	for rows.Next() {
 		var img imageResponse
 		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y); err != nil {
