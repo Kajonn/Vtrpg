@@ -47,6 +47,71 @@
   border: none;
 }
 
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.inline-form input {
+  flex: 1;
+  min-width: 240px;
+}
+
+.invite-card {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  background: #0f172a;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.invite-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.invite-card .badge {
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+  color: #0b1220;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.invite-link {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.invite-link__controls {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.invite-link input,
+.invite-row__input {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #1e293b;
+  background: #020617;
+  color: #e2e8f0;
+}
+
+.invite-link__hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
 .room {
   display: flex;
   flex-direction: column;
@@ -74,6 +139,29 @@
   padding: 0.25rem 0.5rem;
   background: #0b1220;
   border-top: 1px solid #1e293b;
+  flex-wrap: wrap;
+}
+
+.room-footer__meta {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.invite-row {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.invite-row__label {
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.invite-row__input {
+  min-width: 220px;
+  flex: 1 1 320px;
 }
 
 .ghost-button {

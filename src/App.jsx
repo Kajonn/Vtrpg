@@ -3,6 +3,17 @@ import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import './App.css';
 
+const getRoomFromURL = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const room = params.get('room');
+    return room ? room.trim() : '';
+  } catch (err) {
+    console.warn('Failed to read room from URL', err);
+    return '';
+  }
+};
+
 const useWebSocket = (roomId, user, onMessage, onError) => {
   const [socket, setSocket] = useState(null);
   
@@ -48,7 +59,8 @@ const useWebSocket = (roomId, user, onMessage, onError) => {
 
 const App = () => {
   const [user, setUser] = useState(null);
-  const [roomId, setRoomId] = useState('alpha');
+  const initialRoomFromUrl = useRef(getRoomFromURL());
+  const [roomId, setRoomId] = useState(() => initialRoomFromUrl.current || 'alpha');
   const [sharedImages, setSharedImages] = useState([]);
   const [participants, setParticipants] = useState([]);
   const [connectionError, setConnectionError] = useState('');
@@ -72,7 +84,7 @@ const App = () => {
       const parsed = JSON.parse(persisted);
       if (parsed?.user?.name && parsed?.user?.role && parsed?.roomId) {
         setUser(parsed.user);
-        setRoomId(parsed.roomId);
+        setRoomId(initialRoomFromUrl.current || parsed.roomId);
       }
     } catch (err) {
       console.error('Failed to parse persisted session', err);
@@ -188,6 +200,13 @@ const App = () => {
     };
   }, [roomId]);
 
+  const buildInviteUrl = useCallback((value) => {
+    if (!value) return '';
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set('room', value);
+    return url.toString();
+  }, []);
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -195,7 +214,12 @@ const App = () => {
       </header>
       {connectionError && <p className="error">{connectionError}</p>}
       {!user ? (
-        <Login onLogin={(profile) => setUser(profile)} defaultRoom={roomId} onRoomChange={setRoomId} />
+        <Login
+          onLogin={(profile) => setUser(profile)}
+          defaultRoom={roomId}
+          onRoomChange={setRoomId}
+          buildInviteUrl={buildInviteUrl}
+        />
       ) : (
         <Room
           roomId={roomId}
@@ -209,6 +233,7 @@ const App = () => {
           onSendDiceRoll={sendDiceRoll}
           diceLog={diceLog}
           onDiceResult={handleDiceResult}
+          inviteUrl={buildInviteUrl(roomId)}
         />
       )}
     </div>

@@ -20,10 +20,12 @@ const Room = ({
   onSendDiceRoll,
   diceLog,
   onDiceResult,
+  inviteUrl,
 }) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
   const [error, setError] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
   const isGM = user.role === 'gm';
 
   useEffect(() => {
@@ -130,6 +132,19 @@ const Room = ({
     }
   };
 
+  const handleCopyInvite = async () => {
+    if (!inviteUrl) return;
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopyStatus('Kopierad!');
+      setTimeout(() => setCopyStatus(''), 1500);
+    } catch (err) {
+      console.warn('Failed to copy invite link', err);
+      setCopyStatus('Kunde inte kopiera');
+      setTimeout(() => setCopyStatus(''), 2000);
+    }
+  };
+
   return (
     <section className="room">
       {uploading.length > 0 && (
@@ -206,8 +221,19 @@ const Room = ({
       </footer>
 
       <div className="room-footer">
-        <div>
-          <strong>Room: {roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
+        <div className="room-footer__meta">
+          <div>
+            <strong>Room: {roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
+          </div>
+          {inviteUrl && (
+            <div className="invite-row">
+              <span className="invite-row__label">Bjud in:</span>
+              <input value={inviteUrl} readOnly className="invite-row__input" aria-label="invite-link" />
+              <button type="button" className="ghost-button" onClick={handleCopyInvite}>
+                {copyStatus || 'Kopiera länk'}
+              </button>
+            </div>
+          )}
         </div>
         <button type="button" className="ghost-button" onClick={onLogout}>
           Logga ut
@@ -258,6 +284,7 @@ Room.propTypes = {
     })
   ),
   onDiceResult: PropTypes.func,
+  inviteUrl: PropTypes.string,
 };
 
 export default Room;
