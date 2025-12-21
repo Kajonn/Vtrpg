@@ -95,6 +95,7 @@ const RoomRoute = ({
   return (
     <Room
       roomId={session.roomId}
+      roomSlug={session.roomSlug}
       user={session.user}
       images={images}
       participants={participants}

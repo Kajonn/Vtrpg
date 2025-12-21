@@ -20,7 +20,7 @@
   border: 1px solid #1e293b;
   border-radius: 12px;
   padding: 1rem;
-  max-width: 480px;
+  max-width: 960px;
   display: grid;
   gap: 0.5rem;
 }
@@ -104,6 +104,16 @@
   border-top: 1px solid #1e293b;
 }
 
+.room-footer__info {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.invite-link--inline {
+  align-items: center;
+  grid-template-columns: auto 1fr auto;
+}
+
 .ghost-button {
   background: transparent;
   color: #e2e8f0;
@@ -117,6 +127,39 @@
 .ghost-button:hover {
   color: #22d3ee;
   border-color: #67a2ab;
+}
+
+.login-layout {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.card__section {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.invite-box {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px dashed #1e293b;
+  background: rgba(15, 23, 42, 0.6);
+  display: grid;
+  gap: 0.5rem;
+}
+
+.invite-link {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.invite-link code {
+  padding: 0.5rem;
+  background: #020617;
+  border-radius: 8px;
+  border: 1px solid #1e293b;
+  word-break: break-all;
 }
 
 .upload-list {
