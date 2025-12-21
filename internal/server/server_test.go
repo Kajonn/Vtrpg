@@ -36,12 +36,15 @@ type nopFile struct {
 
 func (nopFile) Close() error { return nil }
 
-func newTestServer(t *testing.T, uploadDir string) *Server {
+func newTestServerWithConfig(t *testing.T, uploadDir string, mutate func(*Config)) *Server {
 	t.Helper()
 	cfg := LoadConfig()
 	cfg.UploadDir = uploadDir
 	cfg.FrontendDir = uploadDir
 	cfg.DBPath = filepath.Join(uploadDir, "test.db")
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("failed to create server: %v", err)
@@ -50,6 +53,105 @@ func newTestServer(t *testing.T, uploadDir string) *Server {
 		_ = srv.Close()
 	})
 	return srv
+}
+
+func newTestServer(t *testing.T, uploadDir string) *Server {
+	return newTestServerWithConfig(t, uploadDir, nil)
+}
+
+func createRoomForTest(t *testing.T, router http.Handler) Room {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"name": "Joinable"})
+	req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", w.Code)
+	}
+	var room Room
+	_ = json.NewDecoder(w.Body).Decode(&room)
+	return room
+}
+
+func TestRoomJoin(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+	room := createRoomForTest(t, router)
+
+	joinBody, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Player One"})
+	req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(joinBody))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 join, got %d", w.Code)
+	}
+	var resp struct {
+		RoomID   string `json:"roomId"`
+		RoomSlug string `json:"roomSlug"`
+		Player   Player `json:"player"`
+	}
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if resp.RoomID != room.ID || resp.RoomSlug != room.Slug {
+		t.Fatalf("unexpected room info: %+v", resp)
+	}
+	if resp.Player.ID == "" || resp.Player.Token == "" {
+		t.Fatalf("expected player identifiers, got %+v", resp.Player)
+	}
+	if resp.Player.Role != RolePlayer {
+		t.Fatalf("expected player role to be %s, got %s", RolePlayer, resp.Player.Role)
+	}
+}
+
+func TestRoomJoinValidation(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+
+	room := createRoomForTest(t, router)
+
+	t.Run("invalid name", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "a"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("room not found", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"slug": "missing", "name": "Player Two"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("room full", func(t *testing.T) {
+		dir := t.TempDir()
+		fullSrv := newTestServerWithConfig(t, dir, func(cfg *Config) {
+			cfg.MaxPlayersPerRoom = 1
+		})
+		fullRouter := fullSrv.Router()
+		fullRoom := createRoomForTest(t, fullRouter)
+
+		first, _ := json.Marshal(map[string]string{"slug": fullRoom.Slug, "name": "First"})
+		req1 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(first))
+		w1 := httptest.NewRecorder()
+		fullRouter.ServeHTTP(w1, req1)
+		if w1.Code != http.StatusCreated {
+			t.Fatalf("expected first join 201, got %d", w1.Code)
+		}
+
+		second, _ := json.Marshal(map[string]string{"slug": fullRoom.Slug, "name": "Second"})
+		req2 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(second))
+		w2 := httptest.NewRecorder()
+		fullRouter.ServeHTTP(w2, req2)
+		if w2.Code != http.StatusConflict {
+			t.Fatalf("expected 409 when room is full, got %d", w2.Code)
+		}
+	})
 }
 
 func TestRoomAndImageLifecycle(t *testing.T) {

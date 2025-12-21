@@ -18,6 +18,16 @@ type User struct {
 	Token string `json:"token"`
 }
 
+// Player represents a joined participant in a room.
+type Player struct {
+	ID        string    `json:"id"`
+	RoomID    string    `json:"roomId"`
+	Name      string    `json:"name"`
+	Role      Role      `json:"role"`
+	Token     string    `json:"token"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 // Room represents a shared space.
 type Room struct {
 	ID        string    `json:"id"`
