@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import JoinBySlug from './components/JoinBySlug.jsx';
+import AdminRooms from './components/AdminRooms.jsx';
 import './App.css';
 
 const loadPersistedSession = () => {
@@ -306,6 +307,11 @@ const App = () => {
     <div className="app-shell">
       <header className="app-header">
         <h3>Virtual TTRPG Board</h3>
+        <div className="app-header__actions">
+          <Link to="/admin" className="ghost-button">
+            Admin
+          </Link>
+        </div>
       </header>
       {connectionError && session?.user && <p className="error">{connectionError}</p>}
       <Routes>
@@ -340,6 +346,7 @@ const App = () => {
             />
           )}
         />
+        <Route path="/admin" element={<AdminRooms />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

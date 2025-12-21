@@ -49,6 +49,13 @@ func initSchema(db *sql.DB) error {
 			created_by TEXT,
 			created_at TIMESTAMP NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS room_activity (
+			room_id TEXT PRIMARY KEY,
+			last_used_at TIMESTAMP,
+			total_active_seconds INTEGER NOT NULL DEFAULT 0,
+			active_since TIMESTAMP,
+			FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE
+		);`,
 		`CREATE TABLE IF NOT EXISTS players (
 			id TEXT PRIMARY KEY,
 			room_id TEXT NOT NULL,
@@ -81,6 +88,7 @@ func initSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_dice_logs_room_timestamp ON dice_logs(room_id, timestamp DESC, id DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_images_room_created ON images(room_id, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_players_room_created ON players(room_id, created_at DESC, id DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_room_activity_last_used ON room_activity(last_used_at DESC);`,
 	}
 
 	for _, stmt := range schema {

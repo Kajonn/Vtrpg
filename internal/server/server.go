@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +91,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
+	s.mux.HandleFunc("/admin/rooms", s.handleAdminRooms)
+	s.mux.HandleFunc("/admin/rooms/", s.handleAdminRoom)
 	s.mux.HandleFunc("/rooms/join", s.handleRoomJoin)
 	s.mux.HandleFunc("/rooms", s.handleRooms)
 	s.mux.HandleFunc("/rooms/slug/", s.handleRoomLookup)
@@ -220,6 +223,57 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, rooms)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAdminRooms(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	rooms, err := s.listAdminRooms()
+	if err != nil {
+		s.logger.Error("list admin rooms", slog.String("error", err.Error()))
+		http.Error(w, "failed to list rooms", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rooms)
+}
+
+func (s *Server) handleAdminRoom(w http.ResponseWriter, r *http.Request) {
+	identifier := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/rooms"), "/")
+	if identifier == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	roomID, ok, err := s.resolveRoomID(identifier)
+	if err != nil {
+		s.logger.Error("resolve room for admin", slog.String("error", err.Error()))
+		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		deleted, err := s.deleteRoom(roomID)
+		if err != nil {
+			s.logger.Error("delete room", slog.String("roomId", roomID), slog.String("error", err.Error()))
+			http.Error(w, "failed to delete room", http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -816,6 +870,9 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 			return Room{}, err
 		}
 		if rows, _ := result.RowsAffected(); rows > 0 {
+			if err := s.ensureRoomActivity(room.ID, room.CreatedAt); err != nil {
+				return Room{}, err
+			}
 			return room, nil
 		}
 	}
@@ -843,6 +900,213 @@ func (s *Server) listRooms() ([]Room, error) {
 		return nil, err
 	}
 	return rooms, nil
+}
+
+func (s *Server) ensureRoomActivity(roomID string, createdAt time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO room_activity (room_id, last_used_at, total_active_seconds, active_since) VALUES (?, ?, 0, NULL)`,
+		roomID, createdAt,
+	)
+	return err
+}
+
+func (s *Server) markRoomActive(roomID string, now time.Time) error {
+	if err := s.ensureRoomActivity(roomID, now); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE room_activity SET last_used_at = ?, active_since = COALESCE(active_since, ?) WHERE room_id = ?`,
+		now, now, roomID,
+	)
+	return err
+}
+
+func (s *Server) markRoomInactive(roomID string, now time.Time) error {
+	if err := s.ensureRoomActivity(roomID, now); err != nil {
+		return err
+	}
+
+	var totalSeconds int64
+	var activeSince sql.NullTime
+	if err := s.db.QueryRow(`SELECT total_active_seconds, active_since FROM room_activity WHERE room_id = ?`, roomID).
+		Scan(&totalSeconds, &activeSince); err != nil {
+		return err
+	}
+
+	if activeSince.Valid {
+		elapsed := now.Sub(activeSince.Time.UTC())
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		totalSeconds += int64(elapsed.Seconds())
+	}
+
+	_, err := s.db.Exec(
+		`UPDATE room_activity SET total_active_seconds = ?, active_since = NULL, last_used_at = ? WHERE room_id = ?`,
+		totalSeconds, now, roomID,
+	)
+	return err
+}
+
+func (s *Server) getRoomActivities() (map[string]RoomActivity, error) {
+	rows, err := s.db.Query(`SELECT room_id, last_used_at, total_active_seconds, active_since FROM room_activity`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	activities := make(map[string]RoomActivity)
+	for rows.Next() {
+		var roomID string
+		var lastUsed sql.NullTime
+		var activeSince sql.NullTime
+		var totalSeconds int64
+		if err := rows.Scan(&roomID, &lastUsed, &totalSeconds, &activeSince); err != nil {
+			return nil, err
+		}
+
+		activity := RoomActivity{TotalActiveSeconds: totalSeconds}
+		if lastUsed.Valid {
+			ts := lastUsed.Time.UTC()
+			activity.LastUsedAt = &ts
+		}
+		if activeSince.Valid {
+			ts := activeSince.Time.UTC()
+			activity.ActiveSince = &ts
+		}
+		activities[roomID] = activity
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return activities, nil
+}
+
+func (s *Server) snapshotConnections() (map[string][]clientProfile, map[string]bool) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+
+	connections := make(map[string][]clientProfile, len(s.wsRooms))
+	gmActive := make(map[string]bool, len(s.gmRooms))
+	for roomID, peers := range s.wsRooms {
+		profiles := make([]clientProfile, 0, len(peers))
+		for _, profile := range peers {
+			profiles = append(profiles, profile)
+		}
+		connections[roomID] = profiles
+	}
+	for roomID := range s.gmRooms {
+		gmActive[roomID] = true
+	}
+	return connections, gmActive
+}
+
+func (s *Server) calculateRoomDiskUsage(roomID string) (int64, error) {
+	rows, err := s.db.Query(`SELECT url FROM images WHERE room_id = ?`, roomID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var total int64
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return 0, err
+		}
+		if strings.HasPrefix(url, "/uploads/") {
+			filename := filepath.Base(url)
+			filePath := filepath.Join(s.cfg.UploadDir, filename)
+			info, err := os.Stat(filePath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return 0, err
+			}
+			if !info.IsDir() {
+				total += info.Size()
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Server) listAdminRooms() ([]AdminRoomSummary, error) {
+	rooms, err := s.listRooms()
+	if err != nil {
+		return nil, err
+	}
+
+	activities, err := s.getRoomActivities()
+	if err != nil {
+		return nil, err
+	}
+	connections, gmActive := s.snapshotConnections()
+	now := time.Now().UTC()
+
+	summaries := make([]AdminRoomSummary, 0, len(rooms))
+	for _, room := range rooms {
+		activity := activities[room.ID]
+		profiles := connections[room.ID]
+		if profiles == nil {
+			profiles = []clientProfile{}
+		}
+		active := len(profiles) > 0
+		lastUsed := activity.LastUsedAt
+		activeSince := activity.ActiveSince
+		totalSeconds := activity.TotalActiveSeconds
+		if active {
+			currentTime := now
+			lastUsed = &currentTime
+			if activeSince != nil {
+				totalSeconds += int64(now.Sub(*activeSince).Seconds())
+			}
+		}
+
+		diskUsage, err := s.calculateRoomDiskUsage(room.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		summaries = append(summaries, AdminRoomSummary{
+			ID:                 room.ID,
+			Slug:               room.Slug,
+			Name:               room.Name,
+			CreatedBy:          room.CreatedBy,
+			CreatedAt:          room.CreatedAt,
+			Active:             active,
+			ActiveSince:        activeSince,
+			LastUsedAt:         lastUsed,
+			TotalActiveSeconds: totalSeconds,
+			DiskUsageBytes:     diskUsage,
+			ActiveUsers:        profiles,
+			GMConnected:        gmActive[room.ID],
+		})
+	}
+
+	sort.SliceStable(summaries, func(i, j int) bool {
+		if summaries[i].Active == summaries[j].Active {
+			var left time.Time
+			if summaries[i].LastUsedAt != nil {
+				left = *summaries[i].LastUsedAt
+			}
+			var right time.Time
+			if summaries[j].LastUsedAt != nil {
+				right = *summaries[j].LastUsedAt
+			}
+			if !left.Equal(right) {
+				return left.After(right)
+			}
+			return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+		}
+		return summaries[i].Active
+	})
+
+	return summaries, nil
 }
 
 func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
@@ -876,6 +1140,71 @@ func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
 		return "", false, err
 	}
 	return id, true, nil
+}
+
+func (s *Server) deleteRoom(roomID string) (bool, error) {
+	var urls []string
+	rows, err := s.db.Query(`SELECT url FROM images WHERE room_id = ?`, roomID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return false, err
+		}
+		urls = append(urls, url)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false, err
+	}
+	result, err := tx.Exec(`DELETE FROM rooms WHERE id = ?`, roomID)
+	if err != nil {
+		tx.Rollback()
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		return false, err
+	}
+	if affected == 0 {
+		tx.Rollback()
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	s.closeRoomConnections(roomID)
+
+	for _, url := range urls {
+		if strings.HasPrefix(url, "/uploads/") {
+			filename := filepath.Base(url)
+			_ = os.Remove(filepath.Join(s.cfg.UploadDir, filename))
+		}
+	}
+
+	return true, nil
+}
+
+func (s *Server) closeRoomConnections(roomID string) {
+	s.wsMu.Lock()
+	peers := s.wsRooms[roomID]
+	delete(s.wsRooms, roomID)
+	delete(s.gmRooms, roomID)
+	s.wsMu.Unlock()
+
+	for conn := range peers {
+		_ = writeCloseFrame(conn.conn, 1001)
+		_ = conn.conn.Close()
+	}
 }
 
 func (s *Server) newID() string {
@@ -1191,6 +1520,10 @@ func (s *Server) registerWS(roomID string, profile clientProfile, conn *wsConn) 
 	peers := len(s.wsRooms[roomID])
 	s.wsMu.Unlock()
 
+	if err := s.markRoomActive(roomID, time.Now().UTC()); err != nil {
+		s.logger.Error("record room activity (connect)", slog.String("room", roomID), slog.String("error", err.Error()))
+	}
+
 	s.logger.Info("ws connected", slog.String("room", roomID), slog.Int("peers", peers))
 	s.broadcastRoster(roomID)
 }
@@ -1211,6 +1544,17 @@ func (s *Server) unregisterWS(roomID string, profile clientProfile, conn *wsConn
 	}
 	remaining := len(peers)
 	s.wsMu.Unlock()
+
+	now := time.Now().UTC()
+	if remaining == 0 {
+		if err := s.markRoomInactive(roomID, now); err != nil {
+			s.logger.Error("record room activity (disconnect)", slog.String("room", roomID), slog.String("error", err.Error()))
+		}
+	} else {
+		if err := s.markRoomActive(roomID, now); err != nil {
+			s.logger.Error("update room activity (disconnect)", slog.String("room", roomID), slog.String("error", err.Error()))
+		}
+	}
 
 	s.logger.Info("ws disconnected", slog.String("room", roomID), slog.Int("peers", remaining))
 	s.broadcastRoster(roomID)

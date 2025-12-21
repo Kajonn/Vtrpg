@@ -37,6 +37,27 @@ type Room struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type RoomActivity struct {
+	LastUsedAt         *time.Time `json:"lastUsedAt,omitempty"`
+	TotalActiveSeconds int64      `json:"totalActiveSeconds"`
+	ActiveSince        *time.Time `json:"activeSince,omitempty"`
+}
+
+type AdminRoomSummary struct {
+	ID                 string          `json:"id"`
+	Slug               string          `json:"slug"`
+	Name               string          `json:"name"`
+	CreatedBy          string          `json:"createdBy"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	Active             bool            `json:"active"`
+	ActiveSince        *time.Time      `json:"activeSince,omitempty"`
+	LastUsedAt         *time.Time      `json:"lastUsedAt,omitempty"`
+	TotalActiveSeconds int64           `json:"totalActiveSeconds"`
+	DiskUsageBytes     int64           `json:"diskUsageBytes"`
+	ActiveUsers        []clientProfile `json:"activeUsers"`
+	GMConnected        bool            `json:"gmConnected"`
+}
+
 // Position captures placement data for an image.
 type Position struct {
 	X     float64 `json:"x"`
