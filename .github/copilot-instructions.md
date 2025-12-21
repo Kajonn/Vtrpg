@@ -2,7 +2,7 @@ Project overview
 
 - This repo is a minimal Go backend that serves a static React SPA and provides a small image-sharing WebSocket/REST API used by the frontend.
 - Backend entry: [cmd/server/main.go](cmd/server/main.go). Core server logic: [internal/server/server.go](internal/server/server.go).
-- The frontend SPA lives in the repo `src/` (React + Vite). See [src/App.jsx](src/App.jsx) and components in [src/components](src/components).
+- The frontend SPA lives in the repo `src/` (React + Vite). See [src/App.jsx](src/App.jsx) and components in [src/components](src/components). Room routing uses React Router v7.
 
 Key architecture and data flow
 
@@ -13,6 +13,7 @@ Key architecture and data flow
   - `PATCH /rooms/{roomId}/images/{imageId}` — move image (JSON `{x, y}`).
   - `DELETE /rooms/{roomId}/images/{imageId}` — remove image and delete stored file when applicable.
   - `GET /ws/rooms/{roomId}` — WebSocket/stream endpoint used by the SPA for realtime updates.
+  - Room slugs: `POST /rooms` returns `slug` alongside `id`; `GET /rooms/slug/{slug}` resolves metadata; players join with `POST /rooms/join` using `{ "slug": "<slug>", "name": "<display name>" }` (name 2–32 chars, limited charset).
 
 Notable implementation details for AI agents
 
@@ -27,7 +28,7 @@ Dev workflows & important commands
 - Build backend: `go build ./cmd/server` or run: `PORT=8080 go run ./cmd/server`.
 - Build frontend (root Vite app): `npm run build` (root `package.json` runs `vite build`). The frontend `dist` should be placed at `FRONTEND_DIR` (default `dist`) before starting the Go server.
 - Frontend build helper: `frontend` folder has a `scripts/build.js` invoked by `frontend/package.json` if used.
-- Run e2e tests (Playwright): `npm run test:e2e` (root `package.json` uses Playwright). See [playwright.config.js](playwright.config.js).
+- Tests: Go unit tests with `go test ./...`; frontend lint via `npm run lint`; e2e tests (Playwright) via `npm run test:e2e` (see [playwright.config.js](playwright.config.js)). Run e2e when making substantial feature or flow changes; skip for docs-only edits.
 - Docker: build with `docker build -t vtrpg .` and run with `docker compose up --build` (Dockerfile and `docker-compose.yml` present).
 
 Project conventions & patterns
