@@ -1,6 +1,6 @@
 const ports = [];
 
-onconnect = (event) => {
+self.onconnect = (event) => {
   const port = event.ports[0];
   ports.push(port);
 

@@ -221,7 +221,9 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const tick = () => {
     const world = worldRef.current;
     if (!world) return;
-    world.step(null, 1 / 60); // Fixed 60 FPS timestep for deterministic physics
+    const deltaTime = 1 / 60; // Target 60 FPS
+    const maxSubSteps = 4;
+    world.step(null, deltaTime, maxSubSteps);
     renderFrame();
     stepRef.current += 1;
     const elapsed = rollStartedAtRef.current

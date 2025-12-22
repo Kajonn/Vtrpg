@@ -3,7 +3,11 @@ import PropTypes from 'prop-types';
 import Canvas from './Canvas.jsx';
 
 const fetchImages = async (roomId) => {
-  const response = await fetch(`/rooms/${roomId}/images`);
+  const response = await fetch(`/rooms/${roomId}/images`, {
+    headers: {
+      'Accept': 'application/json',
+    },
+  });
   if (!response.ok) throw new Error('Failed to load images');
   return response.json();
 };
@@ -37,11 +41,21 @@ const Room = ({
     setLoading(true);
     setError('');
     fetchImages(roomId)
-      .then((data) => onImagesUpdate(data))
+      .then((data) => {
+        if (!Array.isArray(data)) {
+          console.error('fetchImages returned non-array:', data);
+          throw new Error('Invalid response format');
+        }
+        onImagesUpdate(data);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
     if (onDiceLogUpdate) {
-      fetch(`/rooms/${roomId}/dice`)
+      fetch(`/rooms/${roomId}/dice`, {
+        headers: {
+          'Accept': 'application/json',
+        },
+      })
         .then((response) => {
           if (!response.ok) throw new Error('Failed to load dice log');
           return response.json();

@@ -1,6 +1,39 @@
 import { test, expect } from '@playwright/test';
 
 const mockImage = { id: 'demo', url: 'https://placekitten.com/400/400', status: 'done', createdAt: new Date().toISOString() };
+const adminRooms = [
+  {
+    id: 'room-1',
+    slug: 'alpha-admin',
+    name: 'Active Room',
+    createdBy: 'Guide',
+    createdAt: new Date().toISOString(),
+    active: true,
+    activeSince: new Date().toISOString(),
+    lastUsedAt: new Date().toISOString(),
+    totalActiveSeconds: 5400,
+    diskUsageBytes: 2048,
+    activeUsers: [
+      { name: 'Guide', role: 'gm' },
+      { name: 'Player One', role: 'player' },
+    ],
+    gmConnected: true,
+  },
+  {
+    id: 'room-2',
+    slug: 'beta-admin',
+    name: 'Spooky Lair',
+    createdBy: 'Keeper',
+    createdAt: new Date().toISOString(),
+    active: false,
+    activeSince: null,
+    lastUsedAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+    totalActiveSeconds: 1800,
+    diskUsageBytes: 10485760,
+    activeUsers: [],
+    gmConnected: false,
+  },
+];
 
 test.describe('drag-drop and zoom', () => {
   let gmLocked = false;
@@ -236,5 +269,57 @@ test.describe('drag-drop and zoom', () => {
     // The login form should be skipped because the session is restored
     await expect(page.getByText('Room: delta')).toBeVisible();
     await expect(page.getByText('Returner')).toBeVisible();
+  });
+});
+
+test.describe('admin rooms', () => {
+  let currentRooms = [];
+
+  test.beforeEach(async ({ page }) => {
+    currentRooms = adminRooms.map((room) => ({ ...room }));
+
+    await page.route('**/admin/rooms**', (route, request) => {
+      const method = request.method();
+      if (method === 'GET') {
+        return route.fulfill({ status: 200, body: JSON.stringify(currentRooms) });
+      }
+      if (method === 'DELETE') {
+        const id = request.url().split('/').pop();
+        currentRooms = currentRooms.filter((room) => room.id !== id && room.slug !== id);
+        return route.fulfill({ status: 200, body: JSON.stringify({ status: 'deleted' }) });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('lists rooms with usage details', async ({ page }) => {
+    await page.goto('/admin');
+
+    const activeRow = page.getByRole('row', { name: /Active Room/ });
+    const archivedRow = page.getByRole('row', { name: /Spooky Lair/ });
+
+    await expect(activeRow).toBeVisible();
+    await expect(activeRow).toContainText('Active Room');
+    await expect(activeRow).toContainText('alpha-admin');
+    await expect(activeRow).toContainText('Aktiv');
+    await expect(activeRow).toContainText('GM: Guide');
+    await expect(activeRow).toContainText('Player One');
+    await expect(activeRow).toContainText('2.0 KB');
+    await expect(activeRow).toContainText('Nu');
+    await expect(activeRow).toContainText('1 h 30 min');
+    await expect(archivedRow).toContainText('Spooky Lair');
+    await expect(archivedRow).toContainText('beta-admin');
+    await expect(archivedRow).toContainText('10 MB');
+    await expect(archivedRow).toContainText('30 min');
+  });
+
+  test('allows deleting a room after confirmation', async ({ page }) => {
+    await page.goto('/admin');
+
+    const targetRow = page.getByRole('row', { name: /Spooky Lair/ });
+    page.once('dialog', (dialog) => dialog.accept());
+    await targetRow.getByRole('button', { name: /Ta bort/ }).click();
+
+    await expect(page.getByText('Spooky Lair')).toBeHidden({ timeout: 5000 });
   });
 });
