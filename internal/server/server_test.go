@@ -147,6 +147,70 @@ func createRoomForTest(t *testing.T, router http.Handler) Room {
 	return room
 }
 
+func TestGetRoomByID(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+	room := createRoomForTest(t, router)
+
+	t.Run("returns room info for existing room", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/"+room.ID, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var resp Room
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.ID != room.ID || resp.Slug != room.Slug {
+			t.Fatalf("unexpected room info: got %+v, want %+v", resp, room)
+		}
+	})
+
+	t.Run("returns room info by slug", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/"+room.Slug, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var resp Room
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.ID != room.ID {
+			t.Fatalf("expected room ID %s, got %s", room.ID, resp.ID)
+		}
+	})
+
+	t.Run("returns 404 for non-existent room", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/nonexistent", nil)
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("serves SPA for non-existent room with HTML accept header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/rooms/nonexistent", nil)
+		req.Header.Set("Accept", "text/html")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		// Should serve the SPA (status 200) instead of 404
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 (SPA served), got %d", w.Code)
+		}
+	})
+
+	t.Run("returns 405 for non-GET methods", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/rooms/"+room.ID, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", w.Code)
+		}
+	})
+}
+
 func TestRoomJoin(t *testing.T) {
 	srv := newTestServer(t, t.TempDir())
 	router := srv.Router()
@@ -243,12 +307,43 @@ func TestRoomJoinValidation(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		if w.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 for unsupported role, got %d", w.Code)
+			t.Fatalf("expected 400 for non-creator trying to join as GM, got %d", w.Code)
 		}
 		var resp map[string]string
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		if resp["error"] == "" {
 			t.Fatalf("expected error message for unsupported role")
+		}
+	})
+
+	t.Run("creator can join as GM", func(t *testing.T) {
+		// Create a room with a specific creator name
+		createBody, _ := json.Marshal(map[string]string{"name": "Creator Room", "createdBy": "Creator Name"})
+		createReq := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(createBody))
+		createW := httptest.NewRecorder()
+		router.ServeHTTP(createW, createReq)
+		if createW.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for room creation, got %d", createW.Code)
+		}
+		var createdRoom Room
+		_ = json.NewDecoder(createW.Body).Decode(&createdRoom)
+
+		// Join as GM with the creator name
+		joinBody, _ := json.Marshal(map[string]string{"slug": createdRoom.Slug, "name": "Creator Name", "role": "gm"})
+		joinReq := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(joinBody))
+		joinW := httptest.NewRecorder()
+		router.ServeHTTP(joinW, joinReq)
+		if joinW.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for creator joining as GM, got %d: %s", joinW.Code, joinW.Body.String())
+		}
+		var joinResp struct {
+			RoomID   string `json:"roomId"`
+			RoomSlug string `json:"roomSlug"`
+			Player   Player `json:"player"`
+		}
+		_ = json.NewDecoder(joinW.Body).Decode(&joinResp)
+		if joinResp.Player.Role != RoleGM {
+			t.Fatalf("expected GM role, got %s", joinResp.Player.Role)
 		}
 	})
 }
@@ -567,4 +662,131 @@ func TestWebsocketBroadcast(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatalf("no event received")
 	}
+}
+
+func TestEmptyCollectionsReturnArrays(t *testing.T) {
+	t.Run("empty images returns array not null", func(t *testing.T) {
+		srv := newTestServer(t, t.TempDir())
+		router := srv.Router()
+		room := createRoomForTest(t, router)
+
+		req := httptest.NewRequest(http.MethodGet, "/rooms/"+room.ID+"/images", nil)
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		// Check raw JSON to ensure it's [] not null
+		body := w.Body.String()
+		if body != "[]\n" && body != "[]" {
+			t.Fatalf("expected empty array [], got %q", body)
+		}
+
+		// Verify it decodes as an empty slice
+		var images []imageResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &images); err != nil {
+			t.Fatalf("failed to decode images: %v", err)
+		}
+		if images == nil {
+			t.Fatalf("expected non-nil slice, got nil")
+		}
+		if len(images) != 0 {
+			t.Fatalf("expected empty slice, got %d items", len(images))
+		}
+	})
+
+	t.Run("empty dice logs returns array not null", func(t *testing.T) {
+		srv := newTestServer(t, t.TempDir())
+		router := srv.Router()
+		room := createRoomForTest(t, router)
+
+		req := httptest.NewRequest(http.MethodGet, "/rooms/"+room.ID+"/dice", nil)
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		// Check raw JSON
+		body := w.Body.String()
+		if body != "[]\n" && body != "[]" {
+			t.Fatalf("expected empty array [], got %q", body)
+		}
+
+		// Verify it decodes as an empty slice
+		var logs []diceLogEntry
+		if err := json.Unmarshal(w.Body.Bytes(), &logs); err != nil {
+			t.Fatalf("failed to decode dice logs: %v", err)
+		}
+		if logs == nil {
+			t.Fatalf("expected non-nil slice, got nil")
+		}
+		if len(logs) != 0 {
+			t.Fatalf("expected empty slice, got %d items", len(logs))
+		}
+	})
+
+	t.Run("empty rooms list returns array not null", func(t *testing.T) {
+		srv := newTestServer(t, t.TempDir())
+		router := srv.Router()
+
+		req := httptest.NewRequest(http.MethodGet, "/rooms", nil)
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		// Check raw JSON
+		body := w.Body.String()
+		if body != "[]\n" && body != "[]" {
+			t.Fatalf("expected empty array [], got %q", body)
+		}
+
+		// Verify it decodes as an empty slice
+		var rooms []Room
+		if err := json.Unmarshal(w.Body.Bytes(), &rooms); err != nil {
+			t.Fatalf("failed to decode rooms: %v", err)
+		}
+		if rooms == nil {
+			t.Fatalf("expected non-nil slice, got nil")
+		}
+		if len(rooms) != 0 {
+			t.Fatalf("expected empty slice, got %d items", len(rooms))
+		}
+	})
+
+	t.Run("multipart upload with no files returns array not null", func(t *testing.T) {
+		srv := newTestServer(t, t.TempDir())
+		router := srv.Router()
+		room := createRoomForTest(t, router)
+
+		buf := &bytes.Buffer{}
+		mw := multipart.NewWriter(buf)
+		// Don't add any files, just close the writer
+		mw.Close()
+
+		req := httptest.NewRequest(http.MethodPost, "/rooms/"+room.ID+"/images", buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Accept", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// This should fail with 400 (bad request) since no files were provided
+		// but if we change the implementation to allow empty uploads,
+		// we want to ensure it returns [] not null
+		if w.Code == http.StatusCreated {
+			body := w.Body.String()
+			if body != "[]\n" && body != "[]" {
+				t.Fatalf("expected empty array [] for no files, got %q", body)
+			}
+		}
+	})
 }

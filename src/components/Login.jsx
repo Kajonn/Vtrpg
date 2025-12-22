@@ -28,7 +28,11 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
     if (role === 'gm') {
       try {
         setSubmitting(true);
-        const response = await fetch(`/rooms/${room}/gm`);
+        const response = await fetch(`/rooms/${room}/gm`, {
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
         if (response.ok) {
           const payload = await response.json();
           if (payload.active) {

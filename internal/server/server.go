@@ -336,10 +336,6 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be 2-32 characters and include only letters, numbers, spaces, hyphens, underscores, or apostrophes"})
 		return
 	}
-	if role != string(RolePlayer) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only player role is supported when joining"})
-		return
-	}
 
 	room, ok, err := s.getRoomBySlug(slug)
 	if err != nil {
@@ -349,6 +345,17 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "room not found"})
+		return
+	}
+
+	// Allow GM role if the user is the room creator
+	isCreator := name == room.CreatedBy
+	if role == string(RoleGM) && !isCreator {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only the room creator can join as GM"})
+		return
+	}
+	if role != string(RolePlayer) && role != string(RoleGM) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid role"})
 		return
 	}
 
@@ -373,7 +380,7 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
 	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 || parts[0] == "" {
+	if len(parts) < 1 || parts[0] == "" {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			s.spaHandler().ServeHTTP(w, r)
 			return
@@ -383,11 +390,58 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	roomID, ok, err := s.resolveRoomID(parts[0])
 	if err != nil {
-		s.logger.Error("resolve room", slog.String("error", err.Error()))
+		s.logger.Error("resolve room", slog.String("error", err.Error()), slog.String("identifier", parts[0]), slog.Int("parts", len(parts)))
 		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
 		return
 	}
 	if !ok {
+		s.logger.Info("room not found", slog.String("identifier", parts[0]), slog.Int("parts", len(parts)), slog.String("path", r.URL.Path))
+		// If it's a browser navigation (not an API call), serve the SPA
+		// so React Router can handle the 404 redirect
+		if len(parts) == 1 && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			accept := r.Header.Get("Accept")
+			// Browser navigation typically includes text/html in Accept header
+			if strings.Contains(accept, "text/html") {
+				s.spaHandler().ServeHTTP(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	// Handle GET /rooms/{roomId} - browser navigation or API endpoint
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// If it's a browser navigation (text/html comes before application/json in Accept), serve the SPA
+		// so React Router can handle the routing
+		accept := r.Header.Get("Accept")
+		htmlIdx := strings.Index(accept, "text/html")
+		jsonIdx := strings.Index(accept, "application/json")
+		// Serve SPA if text/html is present and comes before json (or json is not present)
+		if htmlIdx >= 0 && (jsonIdx < 0 || htmlIdx < jsonIdx) {
+			s.spaHandler().ServeHTTP(w, r)
+			return
+		}
+		// Otherwise, return room info as JSON (API endpoint)
+		room, err := s.getRoomByID(roomID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.NotFound(w, r)
+				return
+			}
+			s.logger.Error("get room", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, room)
+		return
+	}
+
+	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
 	}
@@ -524,7 +578,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		return
 	}
 
-	var uploaded []imageResponse
+	uploaded := make([]imageResponse, 0)
 	for _, fh := range files {
 		file, err := fh.Open()
 		if err != nil {
@@ -680,7 +734,7 @@ func (s *Server) getImages(roomID string) ([]imageResponse, error) {
 	}
 	defer rows.Close()
 
-	var images []imageResponse
+	images := make([]imageResponse, 0)
 	for rows.Next() {
 		var img imageResponse
 		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y); err != nil {
@@ -702,7 +756,7 @@ func (s *Server) getDiceLogs(roomID string) ([]diceLogEntry, error) {
 	}
 	defer rows.Close()
 
-	var logs []diceLogEntry
+	logs := make([]diceLogEntry, 0)
 	for rows.Next() {
 		var entry diceLogEntry
 		var results string
@@ -887,7 +941,7 @@ func (s *Server) listRooms() ([]Room, error) {
 	}
 	defer rows.Close()
 
-	var rooms []Room
+	rooms := make([]Room, 0)
 	for rows.Next() {
 		var room Room
 		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt); err != nil {
@@ -1121,6 +1175,17 @@ func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 	}
 	room.CreatedAt = room.CreatedAt.UTC()
 	return room, true, nil
+}
+
+func (s *Server) getRoomByID(roomID string) (Room, error) {
+	var room Room
+	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE id = ?`, roomID).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt)
+	if err != nil {
+		return Room{}, err
+	}
+	room.CreatedAt = room.CreatedAt.UTC()
+	return room, nil
 }
 
 func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
@@ -1422,9 +1487,23 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 	profile := clientProfile{Name: name, Role: role}
 
-	if profile.Role == string(RoleGM) && s.isGMActive(roomID) {
-		http.Error(w, "gm already active", http.StatusConflict)
-		return
+	// Validate GM role: only allow if no GM is active AND user is the room creator
+	if profile.Role == string(RoleGM) {
+		if s.isGMActive(roomID) {
+			http.Error(w, "gm already active", http.StatusConflict)
+			return
+		}
+		// Check if the user is the room creator
+		room, err := s.getRoomByID(roomID)
+		if err != nil {
+			s.logger.Error("get room for GM validation", slog.String("error", err.Error()))
+			http.Error(w, "failed to validate GM role", http.StatusInternalServerError)
+			return
+		}
+		if room.CreatedBy != name {
+			http.Error(w, "only the room creator can connect as GM", http.StatusForbidden)
+			return
+		}
 	}
 
 	if !hasHeaderToken(r.Header.Get("Connection"), "upgrade") || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
