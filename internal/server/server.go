@@ -101,6 +101,29 @@ func (s *Server) routes() {
 	s.mux.Handle("/", s.spaHandler())
 }
 
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.AdminToken == "" {
+		http.Error(w, "admin access is not configured", http.StatusForbidden)
+		return false
+	}
+
+	header := r.Header.Get("Authorization")
+	if header == "" || !strings.HasPrefix(header, "Bearer ") {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
+	if token != s.cfg.AdminToken {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	return true
+}
+
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -229,6 +252,10 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminRooms(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -244,6 +271,10 @@ func (s *Server) handleAdminRooms(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminRoom(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+
 	identifier := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/rooms"), "/")
 	if identifier == "" {
 		http.NotFound(w, r)
