@@ -135,7 +135,7 @@ func newTestServer(t *testing.T, uploadDir string) *Server {
 
 func createRoomForTest(t *testing.T, router http.Handler) Room {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"name": "Joinable"})
+	body, _ := json.Marshal(map[string]string{"name": "Joinable", "createdBy": "Test Creator"})
 	req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -144,6 +144,33 @@ func createRoomForTest(t *testing.T, router http.Handler) Room {
 	}
 	var room Room
 	_ = json.NewDecoder(w.Body).Decode(&room)
+	return room
+}
+
+func createLegacyRoomForTest(t *testing.T, srv *Server, name string) Room {
+	t.Helper()
+
+	slug, err := srv.newSlug()
+	if err != nil {
+		t.Fatalf("failed to generate slug: %v", err)
+	}
+
+	room := Room{
+		ID:        srv.newID(),
+		Slug:      slug,
+		Name:      name,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if _, err := srv.db.Exec(`INSERT INTO rooms (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)`,
+		room.ID, room.Slug, room.Name, room.CreatedBy, room.CreatedAt); err != nil {
+		t.Fatalf("failed to insert legacy room: %v", err)
+	}
+
+	if err := srv.ensureRoomActivity(room.ID, room.CreatedAt); err != nil {
+		t.Fatalf("failed to ensure room activity: %v", err)
+	}
+
 	return room
 }
 
@@ -328,7 +355,7 @@ func TestRoomJoinValidation(t *testing.T) {
 	})
 
 	t.Run("creatorless room allows GM join", func(t *testing.T) {
-		creatorless := createRoomForTest(t, router)
+		creatorless := createLegacyRoomForTest(t, srv, "Legacy Room")
 		body, _ := json.Marshal(map[string]string{"slug": creatorless.Slug, "name": "Any GM", "role": "gm"})
 		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
 		w := httptest.NewRecorder()
@@ -430,7 +457,7 @@ func TestRoomAndImageLifecycle(t *testing.T) {
 	router := srv.Router()
 
 	// create room
-	body, _ := json.Marshal(map[string]string{"name": "Test"})
+	body, _ := json.Marshal(map[string]string{"name": "Test", "createdBy": "Test Creator"})
 	req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -535,7 +562,7 @@ func TestRoomPersistenceAcrossRestarts(t *testing.T) {
 	srv := newTestServer(t, dir)
 	router := srv.Router()
 
-	body, _ := json.Marshal(map[string]string{"name": "Persistent Room"})
+	body, _ := json.Marshal(map[string]string{"name": "Persistent Room", "createdBy": "Test Creator"})
 	createReq := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
 	createW := httptest.NewRecorder()
 	router.ServeHTTP(createW, createReq)
@@ -588,7 +615,7 @@ func TestWebsocketBroadcast(t *testing.T) {
 	defer srv.Close()
 
 	// create room
-	body, _ := json.Marshal(map[string]string{"name": "WS Room"})
+	body, _ := json.Marshal(map[string]string{"name": "WS Room", "createdBy": "Test Creator"})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/rooms", bytes.NewReader(body))
 	resp, err := srv.Client().Do(req)
 	if err != nil {

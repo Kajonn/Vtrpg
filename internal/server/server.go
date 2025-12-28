@@ -231,6 +231,10 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			name = "Untitled room"
 		}
 		createdBy := strings.TrimSpace(payload.CreatedBy)
+		if createdBy == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "createdBy is required"})
+			return
+		}
 		room, err := s.createRoom(name, createdBy)
 		if err != nil {
 			s.logger.Error("create room", slog.String("error", err.Error()))
@@ -933,6 +937,11 @@ func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageRespon
 }
 
 func (s *Server) createRoom(name, createdBy string) (Room, error) {
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return Room{}, errMissingCreator
+	}
+
 	var room Room
 	for attempt := 0; attempt < 5; attempt++ {
 		slug, err := s.newSlug()
@@ -1384,8 +1393,9 @@ func (s *Server) countPlayers(roomID string) (int, error) {
 }
 
 var (
-	errRoomFull = errors.New("room full")
-	namePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
+	errMissingCreator = errors.New("createdBy is required")
+	errRoomFull       = errors.New("room full")
+	namePattern       = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
 )
 
 func isValidName(name string) bool {
