@@ -902,10 +902,6 @@ func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageRespon
 }
 
 func (s *Server) createRoom(name, createdBy string) (Room, error) {
-	if createdBy == "" {
-		createdBy = "anonymous"
-	}
-
 	var room Room
 	for attempt := 0; attempt < 5; attempt++ {
 		slug, err := s.newSlug()

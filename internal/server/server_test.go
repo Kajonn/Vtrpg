@@ -302,7 +302,18 @@ func TestRoomJoinValidation(t *testing.T) {
 	})
 
 	t.Run("unsupported role", func(t *testing.T) {
-		body, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Player Four", "role": "gm"})
+		// When a creator is recorded, only that creator can join as GM.
+		createBody, _ := json.Marshal(map[string]string{"name": "Creator Locked", "createdBy": "Creator"})
+		createReq := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(createBody))
+		createW := httptest.NewRecorder()
+		router.ServeHTTP(createW, createReq)
+		if createW.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for room creation, got %d", createW.Code)
+		}
+		var created Room
+		_ = json.NewDecoder(createW.Body).Decode(&created)
+
+		body, _ := json.Marshal(map[string]string{"slug": created.Slug, "name": "Player Four", "role": "gm"})
 		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -313,6 +324,24 @@ func TestRoomJoinValidation(t *testing.T) {
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		if resp["error"] == "" {
 			t.Fatalf("expected error message for unsupported role")
+		}
+	})
+
+	t.Run("creatorless room allows GM join", func(t *testing.T) {
+		creatorless := createRoomForTest(t, router)
+		body, _ := json.Marshal(map[string]string{"slug": creatorless.Slug, "name": "Any GM", "role": "gm"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for GM join when creator is unset, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Player Player `json:"player"`
+		}
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp.Player.Role != RoleGM {
+			t.Fatalf("expected GM role, got %s", resp.Player.Role)
 		}
 	})
 
