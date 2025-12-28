@@ -348,9 +348,12 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Allow GM role if the user is the room creator
+	// Allow GM role if the user is the room creator. For legacy rooms created
+	// before the creator requirement, allow the GM role when CreatedBy is
+	// blank.
 	isCreator := name == room.CreatedBy
-	if role == string(RoleGM) && !isCreator {
+	creatorUnset := room.CreatedBy == ""
+	if role == string(RoleGM) && !isCreator && !creatorUnset {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only the room creator can join as GM"})
 		return
 	}
@@ -1493,14 +1496,16 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "gm already active", http.StatusConflict)
 			return
 		}
-		// Check if the user is the room creator
+		// Check if the user is the room creator. Legacy rooms may have an
+		// unset creator, in which case we allow GM connections to maintain
+		// compatibility with the previous behaviour.
 		room, err := s.getRoomByID(roomID)
 		if err != nil {
 			s.logger.Error("get room for GM validation", slog.String("error", err.Error()))
 			http.Error(w, "failed to validate GM role", http.StatusInternalServerError)
 			return
 		}
-		if room.CreatedBy != name {
+		if room.CreatedBy != "" && room.CreatedBy != name {
 			http.Error(w, "only the room creator can connect as GM", http.StatusForbidden)
 			return
 		}
