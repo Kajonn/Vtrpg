@@ -61,12 +61,23 @@ const AdminRooms = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [deleting, setDeleting] = useState({});
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem('adminToken') || '');
+
+  useEffect(() => {
+    if (adminToken) {
+      localStorage.setItem('adminToken', adminToken);
+    } else {
+      localStorage.removeItem('adminToken');
+    }
+  }, [adminToken]);
+
+  const authHeaders = useMemo(() => (adminToken ? { Authorization: `Bearer ${adminToken}` } : {}), [adminToken]);
 
   const fetchRooms = useCallback(async () => {
     setError('');
     setLoading(true);
     try {
-      const response = await fetch('/admin/rooms');
+      const response = await fetch('/admin/rooms', { headers: authHeaders });
       const payload = await response.json().catch(() => []);
       if (!response.ok) {
         throw new Error(payload?.error || 'Kunde inte hämta rum.');
@@ -77,7 +88,7 @@ const AdminRooms = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     fetchRooms();
@@ -95,7 +106,10 @@ const AdminRooms = () => {
       setDeleting((prev) => ({ ...prev, [room.id]: true }));
       setError('');
       try {
-        const response = await fetch(`/admin/rooms/${room.slug || room.id}`, { method: 'DELETE' });
+        const response = await fetch(`/admin/rooms/${room.slug || room.id}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(payload?.error || 'Kunde inte ta bort rummet.');
@@ -129,6 +143,14 @@ const AdminRooms = () => {
             <button type="button" onClick={fetchRooms} className="ghost-button" disabled={loading}>
               Uppdatera
             </button>
+            <input
+              type="password"
+              placeholder="Admin token"
+              value={adminToken}
+              onChange={(event) => setAdminToken(event.target.value.trim())}
+              className="input"
+              aria-label="Admin token"
+            />
           </div>
         </div>
 
