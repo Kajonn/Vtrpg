@@ -125,7 +125,7 @@ const AdminRooms = () => {
         });
       }
     },
-    [fetchRooms],
+    [fetchRooms, authHeaders],
   );
 
   return (
