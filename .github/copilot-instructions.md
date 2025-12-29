@@ -110,8 +110,8 @@ json.NewEncoder(w).Encode(responseData)
 ```javascript
 // Functional component with PropTypes
 function ImageCard({ image, onMove, onDelete }) {
-  const handleClick = () => onMove(image.id);
-  return <div onClick={handleClick}>...</div>;
+  const handleMoveClick = () => onMove(image.id);
+  return <div onClick={handleMoveClick}>...</div>;
 }
 ImageCard.propTypes = {
   image: PropTypes.object.isRequired,
@@ -133,7 +133,7 @@ ImageCard.propTypes = {
 - **Frontend linting**: Run `npm run lint` to check React/JSX code style. Fix issues before committing.
 - **E2E tests**: Run `npm run test:e2e` for feature changes affecting user flows. Tests are in `tests/` directory using Playwright.
 - **Manual testing**: For WebSocket changes, test with multiple concurrent clients. For upload changes, test with various file sizes and types.
-- **Test data**: Use test images/files from `tests/fixtures/` if available, or create temporary test files in `/tmp`.
+- **Test data**: Use test images/files from `tests/fixtures/` if available. For temporary test files, create them in an appropriate temp directory (e.g., use `os.TempDir()` in Go or `tests/tmp/` in the project).
 
 ## Error handling patterns
 
