@@ -58,6 +58,7 @@ Uploads are stored in the `uploads` directory (or the mounted volume) and served
 - User and room selections persist across browser refreshes so sessions seamlessly continue after reloads.
 - A logout button in the room header clears session data and safely disconnects the user.
 - All players can pan the shared canvas to explore the scene collaboratively.
+- An admin dashboard at `/admin` lists all rooms with active users, GM presence, recent activity, total active time, disk usage from uploads, and provides a delete action with confirmation.
 
 ## Room URLs and joining
 

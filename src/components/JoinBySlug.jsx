@@ -16,7 +16,11 @@ const JoinBySlug = ({ onJoinSuccess, existingSession }) => {
     setRoom(null);
     setLoading(true);
     setError('');
-    fetch(`/rooms/slug/${slug}`)
+    fetch(`/rooms/slug/${slug}`, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    })
       .then(async (response) => {
         if (response.ok) return response.json();
         const payload = await response.json().catch(() => ({}));

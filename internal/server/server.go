@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,12 +91,37 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/upload", s.handleUpload)
 	s.mux.HandleFunc("/ws", s.handleWebsocket)
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
+	s.mux.HandleFunc("/admin/rooms", s.handleAdminRooms)
+	s.mux.HandleFunc("/admin/rooms/", s.handleAdminRoom)
 	s.mux.HandleFunc("/rooms/join", s.handleRoomJoin)
 	s.mux.HandleFunc("/rooms", s.handleRooms)
 	s.mux.HandleFunc("/rooms/slug/", s.handleRoomLookup)
 	s.mux.HandleFunc("/rooms/", s.handleRoom)
 	s.mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(s.cfg.UploadDir))))
 	s.mux.Handle("/", s.spaHandler())
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.cfg.AdminToken == "" {
+		http.Error(w, "admin access is not configured", http.StatusForbidden)
+		return false
+	}
+
+	header := r.Header.Get("Authorization")
+	if header == "" || !strings.HasPrefix(header, "Bearer ") {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
+	if token != s.cfg.AdminToken {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+
+	return true
 }
 
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
@@ -205,6 +231,10 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			name = "Untitled room"
 		}
 		createdBy := strings.TrimSpace(payload.CreatedBy)
+		if createdBy == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "createdBy is required"})
+			return
+		}
 		room, err := s.createRoom(name, createdBy)
 		if err != nil {
 			s.logger.Error("create room", slog.String("error", err.Error()))
@@ -220,6 +250,65 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, rooms)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAdminRooms(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	rooms, err := s.listAdminRooms()
+	if err != nil {
+		s.logger.Error("list admin rooms", slog.String("error", err.Error()))
+		http.Error(w, "failed to list rooms", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rooms)
+}
+
+func (s *Server) handleAdminRoom(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+
+	identifier := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin/rooms"), "/")
+	if identifier == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	roomID, ok, err := s.resolveRoomID(identifier)
+	if err != nil {
+		s.logger.Error("resolve room for admin", slog.String("error", err.Error()))
+		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		deleted, err := s.deleteRoom(roomID)
+		if err != nil {
+			s.logger.Error("delete room", slog.String("roomId", roomID), slog.String("error", err.Error()))
+			http.Error(w, "failed to delete room", http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -282,10 +371,6 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be 2-32 characters and include only letters, numbers, spaces, hyphens, underscores, or apostrophes"})
 		return
 	}
-	if role != string(RolePlayer) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only player role is supported when joining"})
-		return
-	}
 
 	room, ok, err := s.getRoomBySlug(slug)
 	if err != nil {
@@ -295,6 +380,20 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "room not found"})
+		return
+	}
+
+	// Allow GM role if the user is the room creator. For legacy rooms created
+	// before the creator requirement, allow the GM role when CreatedBy is
+	// blank.
+	isCreator := name == room.CreatedBy
+	creatorUnset := room.CreatedBy == ""
+	if role == string(RoleGM) && !isCreator && !creatorUnset {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only the room creator can join as GM"})
+		return
+	}
+	if role != string(RolePlayer) && role != string(RoleGM) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid role"})
 		return
 	}
 
@@ -319,7 +418,7 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/rooms/"), "/")
 	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 || parts[0] == "" {
+	if len(parts) < 1 || parts[0] == "" {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			s.spaHandler().ServeHTTP(w, r)
 			return
@@ -329,11 +428,58 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	roomID, ok, err := s.resolveRoomID(parts[0])
 	if err != nil {
-		s.logger.Error("resolve room", slog.String("error", err.Error()))
+		s.logger.Error("resolve room", slog.String("error", err.Error()), slog.String("identifier", parts[0]), slog.Int("parts", len(parts)))
 		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
 		return
 	}
 	if !ok {
+		s.logger.Info("room not found", slog.String("identifier", parts[0]), slog.Int("parts", len(parts)), slog.String("path", r.URL.Path))
+		// If it's a browser navigation (not an API call), serve the SPA
+		// so React Router can handle the 404 redirect
+		if len(parts) == 1 && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			accept := r.Header.Get("Accept")
+			// Browser navigation typically includes text/html in Accept header
+			if strings.Contains(accept, "text/html") {
+				s.spaHandler().ServeHTTP(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
+
+	// Handle GET /rooms/{roomId} - browser navigation or API endpoint
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// If it's a browser navigation (text/html comes before application/json in Accept), serve the SPA
+		// so React Router can handle the routing
+		accept := r.Header.Get("Accept")
+		htmlIdx := strings.Index(accept, "text/html")
+		jsonIdx := strings.Index(accept, "application/json")
+		// Serve SPA if text/html is present and comes before json (or json is not present)
+		if htmlIdx >= 0 && (jsonIdx < 0 || htmlIdx < jsonIdx) {
+			s.spaHandler().ServeHTTP(w, r)
+			return
+		}
+		// Otherwise, return room info as JSON (API endpoint)
+		room, err := s.getRoomByID(roomID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				http.NotFound(w, r)
+				return
+			}
+			s.logger.Error("get room", slog.String("error", err.Error()))
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, room)
+		return
+	}
+
+	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
 	}
@@ -470,7 +616,7 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		return
 	}
 
-	var uploaded []imageResponse
+	uploaded := make([]imageResponse, 0)
 	for _, fh := range files {
 		file, err := fh.Open()
 		if err != nil {
@@ -626,7 +772,7 @@ func (s *Server) getImages(roomID string) ([]imageResponse, error) {
 	}
 	defer rows.Close()
 
-	var images []imageResponse
+	images := make([]imageResponse, 0)
 	for rows.Next() {
 		var img imageResponse
 		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y); err != nil {
@@ -648,7 +794,7 @@ func (s *Server) getDiceLogs(roomID string) ([]diceLogEntry, error) {
 	}
 	defer rows.Close()
 
-	var logs []diceLogEntry
+	logs := make([]diceLogEntry, 0)
 	for rows.Next() {
 		var entry diceLogEntry
 		var results string
@@ -791,8 +937,9 @@ func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageRespon
 }
 
 func (s *Server) createRoom(name, createdBy string) (Room, error) {
+	createdBy = strings.TrimSpace(createdBy)
 	if createdBy == "" {
-		createdBy = "anonymous"
+		return Room{}, errMissingCreator
 	}
 
 	var room Room
@@ -816,6 +963,9 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 			return Room{}, err
 		}
 		if rows, _ := result.RowsAffected(); rows > 0 {
+			if err := s.ensureRoomActivity(room.ID, room.CreatedAt); err != nil {
+				return Room{}, err
+			}
 			return room, nil
 		}
 	}
@@ -830,7 +980,7 @@ func (s *Server) listRooms() ([]Room, error) {
 	}
 	defer rows.Close()
 
-	var rooms []Room
+	rooms := make([]Room, 0)
 	for rows.Next() {
 		var room Room
 		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt); err != nil {
@@ -845,6 +995,213 @@ func (s *Server) listRooms() ([]Room, error) {
 	return rooms, nil
 }
 
+func (s *Server) ensureRoomActivity(roomID string, createdAt time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO room_activity (room_id, last_used_at, total_active_seconds, active_since) VALUES (?, ?, 0, NULL)`,
+		roomID, createdAt,
+	)
+	return err
+}
+
+func (s *Server) markRoomActive(roomID string, now time.Time) error {
+	if err := s.ensureRoomActivity(roomID, now); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE room_activity SET last_used_at = ?, active_since = COALESCE(active_since, ?) WHERE room_id = ?`,
+		now, now, roomID,
+	)
+	return err
+}
+
+func (s *Server) markRoomInactive(roomID string, now time.Time) error {
+	if err := s.ensureRoomActivity(roomID, now); err != nil {
+		return err
+	}
+
+	var totalSeconds int64
+	var activeSince sql.NullTime
+	if err := s.db.QueryRow(`SELECT total_active_seconds, active_since FROM room_activity WHERE room_id = ?`, roomID).
+		Scan(&totalSeconds, &activeSince); err != nil {
+		return err
+	}
+
+	if activeSince.Valid {
+		elapsed := now.Sub(activeSince.Time.UTC())
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		totalSeconds += int64(elapsed.Seconds())
+	}
+
+	_, err := s.db.Exec(
+		`UPDATE room_activity SET total_active_seconds = ?, active_since = NULL, last_used_at = ? WHERE room_id = ?`,
+		totalSeconds, now, roomID,
+	)
+	return err
+}
+
+func (s *Server) getRoomActivities() (map[string]RoomActivity, error) {
+	rows, err := s.db.Query(`SELECT room_id, last_used_at, total_active_seconds, active_since FROM room_activity`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	activities := make(map[string]RoomActivity)
+	for rows.Next() {
+		var roomID string
+		var lastUsed sql.NullTime
+		var activeSince sql.NullTime
+		var totalSeconds int64
+		if err := rows.Scan(&roomID, &lastUsed, &totalSeconds, &activeSince); err != nil {
+			return nil, err
+		}
+
+		activity := RoomActivity{TotalActiveSeconds: totalSeconds}
+		if lastUsed.Valid {
+			ts := lastUsed.Time.UTC()
+			activity.LastUsedAt = &ts
+		}
+		if activeSince.Valid {
+			ts := activeSince.Time.UTC()
+			activity.ActiveSince = &ts
+		}
+		activities[roomID] = activity
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return activities, nil
+}
+
+func (s *Server) snapshotConnections() (map[string][]clientProfile, map[string]bool) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+
+	connections := make(map[string][]clientProfile, len(s.wsRooms))
+	gmActive := make(map[string]bool, len(s.gmRooms))
+	for roomID, peers := range s.wsRooms {
+		profiles := make([]clientProfile, 0, len(peers))
+		for _, profile := range peers {
+			profiles = append(profiles, profile)
+		}
+		connections[roomID] = profiles
+	}
+	for roomID := range s.gmRooms {
+		gmActive[roomID] = true
+	}
+	return connections, gmActive
+}
+
+func (s *Server) calculateRoomDiskUsage(roomID string) (int64, error) {
+	rows, err := s.db.Query(`SELECT url FROM images WHERE room_id = ?`, roomID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var total int64
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return 0, err
+		}
+		if strings.HasPrefix(url, "/uploads/") {
+			filename := filepath.Base(url)
+			filePath := filepath.Join(s.cfg.UploadDir, filename)
+			info, err := os.Stat(filePath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return 0, err
+			}
+			if !info.IsDir() {
+				total += info.Size()
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Server) listAdminRooms() ([]AdminRoomSummary, error) {
+	rooms, err := s.listRooms()
+	if err != nil {
+		return nil, err
+	}
+
+	activities, err := s.getRoomActivities()
+	if err != nil {
+		return nil, err
+	}
+	connections, gmActive := s.snapshotConnections()
+	now := time.Now().UTC()
+
+	summaries := make([]AdminRoomSummary, 0, len(rooms))
+	for _, room := range rooms {
+		activity := activities[room.ID]
+		profiles := connections[room.ID]
+		if profiles == nil {
+			profiles = []clientProfile{}
+		}
+		active := len(profiles) > 0
+		lastUsed := activity.LastUsedAt
+		activeSince := activity.ActiveSince
+		totalSeconds := activity.TotalActiveSeconds
+		if active {
+			currentTime := now
+			lastUsed = &currentTime
+			if activeSince != nil {
+				totalSeconds += int64(now.Sub(*activeSince).Seconds())
+			}
+		}
+
+		diskUsage, err := s.calculateRoomDiskUsage(room.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		summaries = append(summaries, AdminRoomSummary{
+			ID:                 room.ID,
+			Slug:               room.Slug,
+			Name:               room.Name,
+			CreatedBy:          room.CreatedBy,
+			CreatedAt:          room.CreatedAt,
+			Active:             active,
+			ActiveSince:        activeSince,
+			LastUsedAt:         lastUsed,
+			TotalActiveSeconds: totalSeconds,
+			DiskUsageBytes:     diskUsage,
+			ActiveUsers:        profiles,
+			GMConnected:        gmActive[room.ID],
+		})
+	}
+
+	sort.SliceStable(summaries, func(i, j int) bool {
+		if summaries[i].Active == summaries[j].Active {
+			var left time.Time
+			if summaries[i].LastUsedAt != nil {
+				left = *summaries[i].LastUsedAt
+			}
+			var right time.Time
+			if summaries[j].LastUsedAt != nil {
+				right = *summaries[j].LastUsedAt
+			}
+			if !left.Equal(right) {
+				return left.After(right)
+			}
+			return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+		}
+		return summaries[i].Active
+	})
+
+	return summaries, nil
+}
+
 func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 	var room Room
 	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE slug = ?`, slug).
@@ -857,6 +1214,17 @@ func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 	}
 	room.CreatedAt = room.CreatedAt.UTC()
 	return room, true, nil
+}
+
+func (s *Server) getRoomByID(roomID string) (Room, error) {
+	var room Room
+	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE id = ?`, roomID).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt)
+	if err != nil {
+		return Room{}, err
+	}
+	room.CreatedAt = room.CreatedAt.UTC()
+	return room, nil
 }
 
 func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
@@ -876,6 +1244,71 @@ func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
 		return "", false, err
 	}
 	return id, true, nil
+}
+
+func (s *Server) deleteRoom(roomID string) (bool, error) {
+	var urls []string
+	rows, err := s.db.Query(`SELECT url FROM images WHERE room_id = ?`, roomID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var url string
+		if err := rows.Scan(&url); err != nil {
+			return false, err
+		}
+		urls = append(urls, url)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return false, err
+	}
+	result, err := tx.Exec(`DELETE FROM rooms WHERE id = ?`, roomID)
+	if err != nil {
+		tx.Rollback()
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		tx.Rollback()
+		return false, err
+	}
+	if affected == 0 {
+		tx.Rollback()
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	s.closeRoomConnections(roomID)
+
+	for _, url := range urls {
+		if strings.HasPrefix(url, "/uploads/") {
+			filename := filepath.Base(url)
+			_ = os.Remove(filepath.Join(s.cfg.UploadDir, filename))
+		}
+	}
+
+	return true, nil
+}
+
+func (s *Server) closeRoomConnections(roomID string) {
+	s.wsMu.Lock()
+	peers := s.wsRooms[roomID]
+	delete(s.wsRooms, roomID)
+	delete(s.gmRooms, roomID)
+	s.wsMu.Unlock()
+
+	for conn := range peers {
+		_ = writeCloseFrame(conn.conn, 1001)
+		_ = conn.conn.Close()
+	}
 }
 
 func (s *Server) newID() string {
@@ -960,8 +1393,9 @@ func (s *Server) countPlayers(roomID string) (int, error) {
 }
 
 var (
-	errRoomFull = errors.New("room full")
-	namePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
+	errMissingCreator = errors.New("createdBy is required")
+	errRoomFull       = errors.New("room full")
+	namePattern       = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
 )
 
 func isValidName(name string) bool {
@@ -1093,9 +1527,25 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 	profile := clientProfile{Name: name, Role: role}
 
-	if profile.Role == string(RoleGM) && s.isGMActive(roomID) {
-		http.Error(w, "gm already active", http.StatusConflict)
-		return
+	// Validate GM role: only allow if no GM is active AND user is the room creator
+	if profile.Role == string(RoleGM) {
+		if s.isGMActive(roomID) {
+			http.Error(w, "gm already active", http.StatusConflict)
+			return
+		}
+		// Check if the user is the room creator. Legacy rooms may have an
+		// unset creator, in which case we allow GM connections to maintain
+		// compatibility with the previous behaviour.
+		room, err := s.getRoomByID(roomID)
+		if err != nil {
+			s.logger.Error("get room for GM validation", slog.String("error", err.Error()))
+			http.Error(w, "failed to validate GM role", http.StatusInternalServerError)
+			return
+		}
+		if room.CreatedBy != "" && room.CreatedBy != name {
+			http.Error(w, "only the room creator can connect as GM", http.StatusForbidden)
+			return
+		}
 	}
 
 	if !hasHeaderToken(r.Header.Get("Connection"), "upgrade") || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
@@ -1191,6 +1641,10 @@ func (s *Server) registerWS(roomID string, profile clientProfile, conn *wsConn) 
 	peers := len(s.wsRooms[roomID])
 	s.wsMu.Unlock()
 
+	if err := s.markRoomActive(roomID, time.Now().UTC()); err != nil {
+		s.logger.Error("record room activity (connect)", slog.String("room", roomID), slog.String("error", err.Error()))
+	}
+
 	s.logger.Info("ws connected", slog.String("room", roomID), slog.Int("peers", peers))
 	s.broadcastRoster(roomID)
 }
@@ -1211,6 +1665,17 @@ func (s *Server) unregisterWS(roomID string, profile clientProfile, conn *wsConn
 	}
 	remaining := len(peers)
 	s.wsMu.Unlock()
+
+	now := time.Now().UTC()
+	if remaining == 0 {
+		if err := s.markRoomInactive(roomID, now); err != nil {
+			s.logger.Error("record room activity (disconnect)", slog.String("room", roomID), slog.String("error", err.Error()))
+		}
+	} else {
+		if err := s.markRoomActive(roomID, now); err != nil {
+			s.logger.Error("update room activity (disconnect)", slog.String("room", roomID), slog.String("error", err.Error()))
+		}
+	}
 
 	s.logger.Info("ws disconnected", slog.String("room", roomID), slog.Int("peers", remaining))
 	s.broadcastRoster(roomID)
