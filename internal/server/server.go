@@ -402,6 +402,10 @@ func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "room full"})
 		return
 	}
+	if errors.Is(err, errNameTaken) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "name already in use in this room"})
+		return
+	}
 	if err != nil {
 		s.logger.Error("create player", slog.String("error", err.Error()))
 		http.Error(w, "failed to join room", http.StatusInternalServerError)
@@ -1367,9 +1371,11 @@ func (s *Server) createPlayer(roomID, name string, role Role) (Player, error) {
 		context.Background(),
 		`INSERT INTO players (id, room_id, name, token, role, created_at)
 			SELECT ?, ?, ?, ?, ?, ?
-			WHERE (SELECT COUNT(1) FROM players WHERE room_id = ?) < ?;`,
+			WHERE (SELECT COUNT(1) FROM players WHERE room_id = ?) < ?
+			AND (SELECT COUNT(1) FROM players WHERE room_id = ? AND name = ?) = 0;`,
 		player.ID, player.RoomID, player.Name, player.Token, player.Role, player.CreatedAt,
 		roomID, s.cfg.MaxPlayersPerRoom,
+		roomID, name,
 	)
 	if err != nil {
 		return Player{}, err
@@ -1380,6 +1386,11 @@ func (s *Server) createPlayer(roomID, name string, role Role) (Player, error) {
 		return Player{}, err
 	}
 	if rowsAffected == 0 {
+		// Check which constraint failed
+		var count int
+		if err := s.db.QueryRow(`SELECT COUNT(1) FROM players WHERE room_id = ? AND name = ?`, roomID, name).Scan(&count); err == nil && count > 0 {
+			return Player{}, errNameTaken
+		}
 		return Player{}, errRoomFull
 	}
 
@@ -1395,6 +1406,7 @@ func (s *Server) countPlayers(roomID string) (int, error) {
 var (
 	errMissingCreator = errors.New("createdBy is required")
 	errRoomFull       = errors.New("room full")
+	errNameTaken      = errors.New("name already in use")
 	namePattern       = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s'_-]{1,31}$`)
 )
 

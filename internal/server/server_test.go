@@ -404,6 +404,133 @@ func TestRoomJoinValidation(t *testing.T) {
 	})
 }
 
+func TestRoomJoinUniqueNames(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+	room := createRoomForTest(t, router)
+
+	t.Run("reject duplicate name", func(t *testing.T) {
+		// First join with a name
+		firstBody, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Alice"})
+		req1 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(firstBody))
+		w1 := httptest.NewRecorder()
+		router.ServeHTTP(w1, req1)
+		if w1.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for first join, got %d", w1.Code)
+		}
+
+		// Try to join again with the same name
+		secondBody, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Alice"})
+		req2 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(secondBody))
+		w2 := httptest.NewRecorder()
+		router.ServeHTTP(w2, req2)
+		if w2.Code != http.StatusConflict {
+			t.Fatalf("expected 409 for duplicate name, got %d", w2.Code)
+		}
+
+		var resp map[string]string
+		_ = json.NewDecoder(w2.Body).Decode(&resp)
+		if resp["error"] == "" {
+			t.Fatalf("expected error message for duplicate name")
+		}
+	})
+
+	t.Run("allow different names", func(t *testing.T) {
+		// Create a new room for this test
+		newRoom := createRoomForTest(t, router)
+
+		// Join with first name
+		firstBody, _ := json.Marshal(map[string]string{"slug": newRoom.Slug, "name": "Bob"})
+		req1 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(firstBody))
+		w1 := httptest.NewRecorder()
+		router.ServeHTTP(w1, req1)
+		if w1.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for first join, got %d", w1.Code)
+		}
+
+		// Join with different name - should succeed
+		secondBody, _ := json.Marshal(map[string]string{"slug": newRoom.Slug, "name": "Charlie"})
+		req2 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(secondBody))
+		w2 := httptest.NewRecorder()
+		router.ServeHTTP(w2, req2)
+		if w2.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for second join with different name, got %d", w2.Code)
+		}
+	})
+
+	t.Run("same name in different rooms allowed", func(t *testing.T) {
+		// Create two rooms
+		room1 := createRoomForTest(t, router)
+		room2 := createRoomForTest(t, router)
+
+		// Join room1 with name "David"
+		firstBody, _ := json.Marshal(map[string]string{"slug": room1.Slug, "name": "David"})
+		req1 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(firstBody))
+		w1 := httptest.NewRecorder()
+		router.ServeHTTP(w1, req1)
+		if w1.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for join to room1, got %d", w1.Code)
+		}
+
+		// Join room2 with same name "David" - should succeed since it's a different room
+		secondBody, _ := json.Marshal(map[string]string{"slug": room2.Slug, "name": "David"})
+		req2 := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(secondBody))
+		w2 := httptest.NewRecorder()
+		router.ServeHTTP(w2, req2)
+		if w2.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for join to room2 with same name, got %d", w2.Code)
+		}
+	})
+}
+
+func TestRoomJoinUniqueNamesIsAtomic(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+	room := createRoomForTest(t, router)
+
+	var wg sync.WaitGroup
+	statuses := make(chan int, 2)
+	// Two goroutines trying to join with the same name concurrently
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "Concurrent"})
+			req := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			statuses <- w.Code
+		}()
+	}
+	wg.Wait()
+	close(statuses)
+
+	var created, conflicts int
+	for code := range statuses {
+		switch code {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("unexpected status code: %d", code)
+		}
+	}
+	if created != 1 || conflicts != 1 {
+		t.Fatalf("expected one successful join and one conflict for duplicate name, got created=%d conflicts=%d", created, conflicts)
+	}
+
+	// Verify only one player with this name exists
+	var count int
+	err := srv.db.QueryRow(`SELECT COUNT(1) FROM players WHERE room_id = ? AND name = ?`, room.ID, "Concurrent").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to count players with name: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one player with name 'Concurrent', got %d", count)
+	}
+}
+
 func TestRoomJoinCapacityIsAtomic(t *testing.T) {
 	dir := t.TempDir()
 	srv := newTestServerWithConfig(t, dir, func(cfg *Config) {
