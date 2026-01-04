@@ -110,6 +110,116 @@ func TestCreateRoomSlugUniqueness(t *testing.T) {
 	}
 }
 
+func TestCreateRoomCreatorNameValidation(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+
+	t.Run("reject single character creator name", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"name": "Test Room", "createdBy": "a"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for single character creator, got %d", w.Code)
+		}
+		var resp map[string]string
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] == "" {
+			t.Fatalf("expected error message")
+		}
+	})
+
+	t.Run("reject invalid special characters in creator name", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"name": "Test Room", "createdBy": "invalid@name"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for invalid special characters, got %d", w.Code)
+		}
+		var resp map[string]string
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] == "" {
+			t.Fatalf("expected error message")
+		}
+	})
+
+	t.Run("accept valid creator name", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"name": "Test Room", "createdBy": "Valid Name"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for valid creator, got %d: %s", w.Code, w.Body.String())
+		}
+		var room Room
+		_ = json.NewDecoder(w.Body).Decode(&room)
+		if room.CreatedBy != "Valid Name" {
+			t.Fatalf("expected creator 'Valid Name', got %s", room.CreatedBy)
+		}
+	})
+
+	t.Run("reject creator name longer than 32 characters", func(t *testing.T) {
+		longName := "This is a very long name that exceeds the limit"
+		body, _ := json.Marshal(map[string]string{"name": "Test Room", "createdBy": longName})
+		req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for name too long, got %d", w.Code)
+		}
+		var resp map[string]string
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["error"] == "" {
+			t.Fatalf("expected error message")
+		}
+	})
+
+	t.Run("accept creator name with valid special characters", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"name": "Test Room", "createdBy": "O'Connor-Name_123"})
+		req := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for valid special characters, got %d: %s", w.Code, w.Body.String())
+		}
+		var room Room
+		_ = json.NewDecoder(w.Body).Decode(&room)
+		if room.CreatedBy != "O'Connor-Name_123" {
+			t.Fatalf("expected creator 'O'Connor-Name_123', got %s", room.CreatedBy)
+		}
+	})
+
+	t.Run("creator can join as GM after room creation", func(t *testing.T) {
+		// Create a room with a valid creator name
+		createBody, _ := json.Marshal(map[string]string{"name": "GM Test Room", "createdBy": "GM Creator"})
+		createReq := httptest.NewRequest(http.MethodPost, "/rooms", bytes.NewReader(createBody))
+		createW := httptest.NewRecorder()
+		router.ServeHTTP(createW, createReq)
+		if createW.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for room creation, got %d: %s", createW.Code, createW.Body.String())
+		}
+		var room Room
+		_ = json.NewDecoder(createW.Body).Decode(&room)
+
+		// Verify creator can join as GM
+		joinBody, _ := json.Marshal(map[string]string{"slug": room.Slug, "name": "GM Creator", "role": "gm"})
+		joinReq := httptest.NewRequest(http.MethodPost, "/rooms/join", bytes.NewReader(joinBody))
+		joinW := httptest.NewRecorder()
+		router.ServeHTTP(joinW, joinReq)
+		if joinW.Code != http.StatusCreated {
+			t.Fatalf("expected 201 for GM join, got %d: %s", joinW.Code, joinW.Body.String())
+		}
+		var joinResp struct {
+			Player Player `json:"player"`
+		}
+		_ = json.NewDecoder(joinW.Body).Decode(&joinResp)
+		if joinResp.Player.Role != RoleGM {
+			t.Fatalf("expected GM role, got %s", joinResp.Player.Role)
+		}
+	})
+}
+
 func newTestServerWithConfig(t *testing.T, uploadDir string, mutate func(*Config)) *Server {
 	t.Helper()
 	cfg := LoadConfig()
