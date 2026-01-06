@@ -14,6 +14,7 @@ import {
   DIE_DENSITIES,
   useDiceModels,
   setupScene,
+  updateCamera,
   buildBounds,
   prepareDieMesh,
   createColliderForSides,
@@ -38,6 +39,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const [diceCount, setDiceCount] = useState(2);
   const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
+  const [canvasDimensions, setCanvasDimensions] = useState({ width: ARENA_WIDTH, height: ARENA_HEIGHT });
   const { diceModels, modelsReady } = useDiceModels();
 
   const roomKey = useMemo(() => roomId || 'default', [roomId]);
@@ -163,7 +165,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
         velocity: {
           x: randomInRange(rng, -450, 450),
           y: randomInRange(rng, 320, 620),
-          z: randomInRange(rng, 0, 100),
+          z: randomInRange(rng, 0, 0),
         },
         angularVelocity: {
           x: randomInRange(rng, -10, 10),
@@ -312,14 +314,36 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const sceneSetup = setupScene(canvas);
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width || ARENA_WIDTH;
+    const height = rect.height || ARENA_HEIGHT;
+    setCanvasDimensions({ width, height });
+
+    const sceneSetup = setupScene(canvas, width, height);
     if (!sceneSetup) return;
 
     rendererRef.current = { renderer: sceneSetup.renderer, camera: sceneSetup.camera };
     sceneRef.current = sceneSetup.scene;
     initializePhysics();
 
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width: newWidth, height: newHeight } = entry.contentRect;
+        if (newWidth > 0 && newHeight > 0) {
+          setCanvasDimensions({ width: newWidth, height: newHeight });
+          const { renderer, camera } = rendererRef.current || {};
+          if (renderer && camera) {
+            updateCamera(camera, renderer, newWidth, newHeight);
+            renderFrame();
+          }
+        }
+      }
+    });
+
+    resizeObserver.observe(canvas);
+
     return () => {
+      resizeObserver.disconnect();
       teardown();
       worldRef.current = null;
       rendererRef.current?.renderer?.dispose();
@@ -406,7 +430,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
   return (
     <div className="dice-overlay" aria-label="dice-overlay">
-      <canvas ref={canvasRef} className="dice-canvas" width={ARENA_WIDTH} height={ARENA_HEIGHT} aria-label="dice-canvas" />
+      <canvas ref={canvasRef} className="dice-canvas" aria-label="dice-canvas" />
       <div className="dice-controls" aria-live="polite">
         <div className="dice-count">Dice: {diceCount}</div>
         <div className="dice-buttons">

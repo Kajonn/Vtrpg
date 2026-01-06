@@ -5,7 +5,7 @@ import { MTLLoader } from 'three/examples/jsm/Addons.js';
 
 export const ARENA_WIDTH = 1024;
 export const ARENA_HEIGHT = 900;
-export const DIE_SIZE = 64;
+export const DIE_SIZE = 32;
 export const MAX_STEPS = 400;
 export const WALL_THICKNESS = 12;
 export const MIN_ROLL_DURATION = 1000;
@@ -94,7 +94,7 @@ export const DIE_SCALES = {
   8: 90,
   10: 90,
   12: 90,
-  20: 95,
+  20: 128,
 };
 
 export const DIE_DENSITIES = {
@@ -312,24 +312,37 @@ export const useDiceModels = () => {
   return { diceModels: diceModelsRef.current, modelsReady };
 };
 
-export const setupScene = (canvas) => {
+export const setupScene = (canvas, width = ARENA_WIDTH, height = ARENA_HEIGHT) => {
   if (!canvas) return null;
 
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-  renderer.setSize(ARENA_WIDTH, ARENA_HEIGHT);
+  renderer.setSize(width, height);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.shadowMap.enabled = true;
 
   const scene = new THREE.Scene();
   scene.background = null;
 
-  const aspect = ARENA_WIDTH / ARENA_HEIGHT;
-  const frustumSize = ARENA_HEIGHT;
+  // Calculate camera to always show full physics arena
+  const canvasAspect = width / height;
+  const arenaAspect = ARENA_WIDTH / ARENA_HEIGHT;
+  
+  let viewWidth, viewHeight;
+  if (canvasAspect > arenaAspect) {
+    // Canvas is wider - fit to height
+    viewHeight = ARENA_HEIGHT;
+    viewWidth = ARENA_HEIGHT * canvasAspect;
+  } else {
+    // Canvas is taller - fit to width
+    viewWidth = ARENA_WIDTH;
+    viewHeight = ARENA_WIDTH / canvasAspect;
+  }
+  
   const camera = new THREE.OrthographicCamera(
-    (-frustumSize * aspect) / 2,
-    (frustumSize * aspect) / 2,
-    frustumSize / 2,
-    -frustumSize / 2,
+    -viewWidth / 2,
+    viewWidth / 2,
+    viewHeight / 2,
+    -viewHeight / 2,
     1,
     1000
   );
@@ -345,6 +358,33 @@ export const setupScene = (canvas) => {
   scene.add(directional);
 
   return { renderer, camera, scene };
+};
+
+export const updateCamera = (camera, renderer, width, height) => {
+  if (!camera || !renderer) return;
+  
+  // Calculate camera to always show full physics arena
+  const canvasAspect = width / height;
+  const arenaAspect = ARENA_WIDTH / ARENA_HEIGHT;
+  
+  let viewWidth, viewHeight;
+  if (canvasAspect > arenaAspect) {
+    // Canvas is wider - fit to height
+    viewHeight = ARENA_HEIGHT;
+    viewWidth = ARENA_HEIGHT * canvasAspect;
+  } else {
+    // Canvas is taller - fit to width
+    viewWidth = ARENA_WIDTH;
+    viewHeight = ARENA_WIDTH / canvasAspect;
+  }
+  
+  camera.left = -viewWidth / 2;
+  camera.right = viewWidth / 2;
+  camera.top = viewHeight / 2;
+  camera.bottom = -viewHeight / 2;
+  camera.updateProjectionMatrix();
+  
+  renderer.setSize(width, height);
 };
 
 export const buildBounds = (world, RAPIER) => {
