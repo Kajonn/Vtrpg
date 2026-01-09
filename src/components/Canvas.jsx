@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import DiceOverlay from './DiceOverlay.jsx';
 import DiceDebug from './DiceDebug.jsx';
@@ -34,44 +34,87 @@ const Canvas = ({
   useEffect(() => {
     const nextImages = images.filter((img) => !removedIdsRef.current.has(img.id));
     setRenderImages(nextImages);
+    
+    // Clean up removedIdsRef: remove IDs that are no longer in the source images
+    const currentIds = new Set(images.map(img => img.id));
+    removedIdsRef.current.forEach(id => {
+      if (!currentIds.has(id)) {
+        removedIdsRef.current.delete(id);
+      }
+    });
+    
     setLocalPositions((prev) => {
       const next = {};
       nextImages.forEach((img) => {
-        if (prev[img.id]) {
+        // Only preserve local position if we're actively dragging this image
+        // Otherwise, accept updates from server (for multiplayer sync)
+        if (prev[img.id] && dragging.id === img.id) {
           next[img.id] = prev[img.id];
+        } else {
+          next[img.id] = { x: img.x || 0, y: img.y || 0 };
         }
       });
       return next;
     });
-  }, [images]);
+  }, [images, dragging.id]);
 
-  const toCanvasCoords = (clientX, clientY) => {
+  const toCanvasCoords = useCallback((clientX, clientY) => {
     const bounds = containerRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 0, y: 0 };
+    // Use center-relative coordinates to match handleWheel's pan coordinate space
+    const screenX = clientX - bounds.left - bounds.width / 2;
+    const screenY = clientY - bounds.top - bounds.height / 2;
     return {
-      x: (clientX - bounds.left - pan.x) / scale,
-      y: (clientY - bounds.top - pan.y) / scale,
+      x: (screenX - pan.x) / scale,
+      y: (screenY - pan.y) / scale,
     };
-  };
+  }, [pan, scale]);
 
-  const getImagePosition = (image) => localPositions[image.id] || { x: image.x || 0, y: image.y || 0 };
+  const getImagePosition = useCallback((image) => {
+    return localPositions[image.id] || { x: image.x || 0, y: image.y || 0 };
+  }, [localPositions]);
 
-  const handleWheel = (event) => {
+  const handleWheel = useCallback((event) => {
     event.preventDefault();
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    
+    const mouseX = (event.clientX - bounds.left)-(bounds.width)/2;
+    const mouseY = (event.clientY - bounds.top)-(bounds.height)/2;
+    
     const delta = -event.deltaY;
-    const nextScale = clamp(scale + delta * 0.001, 0.5, 3);
+    const nextScale = clamp(scale + delta * 0.001, 0.2, 5);
+    
+    // Adjust pan to keep zoom centered on mouse position
+    const scaleFactor = nextScale / scale;
+    const newPanX = mouseX - (mouseX - pan.x) * scaleFactor;
+    const newPanY = mouseY - (mouseY - pan.y) * scaleFactor;
+    
     setScale(nextScale);
-  };
+    setPan({ x: newPanX, y: newPanY });
+  }, [scale, pan]);
+
+  // Add wheel listener with passive: false to allow preventDefault in Edge
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [handleWheel]);
 
   const startPan = (event) => {
     if (event.target.closest('.dice-controls')) return;
     if (dragging.id || panning.active) return;
+    event.preventDefault();
     panOrigin.current = { x: event.clientX, y: event.clientY, startX: pan.x, startY: pan.y };
     containerRef.current?.setPointerCapture(event.pointerId);
     setPanning({ active: true, pointerId: event.pointerId });
   };
 
-  const handleCanvasDrop = async (event) => {
+  const handleCanvasDrop = useCallback(async (event) => {
     event.preventDefault();
     if (!isGM) return;
     const pos = toCanvasCoords(event.clientX, event.clientY);
@@ -84,7 +127,7 @@ const Canvas = ({
     if (files.length) {
       await onUploadFiles?.(files, pos);
     }
-  };
+  }, [isGM, toCanvasCoords, onShareUrl, onUploadFiles]);
 
   const handlePaste = async (event) => {
     if (!isGM) return;
@@ -94,7 +137,12 @@ const Canvas = ({
     }
   };
 
-  const beginDrag = (image, event) => {
+  const resetView = () => {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const beginDrag = useCallback((image, event) => {
     if (!isGM) return;
     event.preventDefault();
     event.stopPropagation();
@@ -104,9 +152,9 @@ const Canvas = ({
     livePosition.current = position;
     containerRef.current?.setPointerCapture(event.pointerId);
     setDragging({ id: image.id, pointerId: event.pointerId });
-  };
+  }, [isGM, toCanvasCoords, getImagePosition]);
 
-  const handlePointerMove = (event) => {
+  const handlePointerMove = useCallback((event) => {
     if (panning.active && panning.pointerId === event.pointerId) {
       const dx = event.clientX - panOrigin.current.x;
       const dy = event.clientY - panOrigin.current.y;
@@ -118,7 +166,7 @@ const Canvas = ({
     const nextPosition = { x: pointer.x - dragOffset.current.x, y: pointer.y - dragOffset.current.y };
     livePosition.current = nextPosition;
     setLocalPositions((prev) => ({ ...prev, [dragging.id]: nextPosition }));
-  };
+  }, [panning, dragging, toCanvasCoords]);
 
   const endDrag = async (event) => {
     if (panning.active && panning.pointerId === event.pointerId) {
@@ -138,13 +186,19 @@ const Canvas = ({
     () =>
       renderImages.map((image) => {
         const position = getImagePosition(image);
+        const isDragging = dragging.id === image.id;
         return (
           <div
             className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''}`}
             key={image.id || image.url}
             data-id={image.id}
-            style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
+            style={{ 
+              transform: `translate(${position.x}px, ${position.y}px)`,
+              cursor: isGM ? (isDragging ? 'grabbing' : 'grab') : 'default',
+              userSelect: 'none'
+            }}
             onPointerDown={(event) => beginDrag(image, event)}
+            onDragStart={(event) => event.preventDefault()}
           >
             {isGM && (
               <button
@@ -168,28 +222,54 @@ const Canvas = ({
               draggable={false}
               style={{ maxWidth: '100%', maxHeight: '100%' }}
             />
-            {image.status && <span className={`badge badge--${image.status}`}>{image.status}</span>}
+            {image.status && image.status !== 'done' && <span className={`badge badge--${image.status}`}>{image.status}</span>}
           </div>
         );
       }),
-    [renderImages, isGM, onRemoveImage, localPositions]
+    [renderImages, isGM, onRemoveImage, getImagePosition, beginDrag, dragging]
   );
 
   return (
     <div
       className="canvas"
       ref={containerRef}
-      onWheel={handleWheel}
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onPointerLeave={endDrag}
       onPointerDown={startPan}
+      onDragStart={(event) => event.preventDefault()}
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleCanvasDrop}
       onPaste={handlePaste}
       style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
     >
+      <button
+        type="button"
+        className="reset-view-button"
+        style={{ 
+          position: 'absolute', 
+          top: '10px', 
+          left: '10px', 
+          zIndex: 1000, 
+          pointerEvents: 'auto',
+          background: 'rgba(0, 0, 0, 0.7)',
+          color: 'white',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          cursor: 'pointer',
+          fontSize: '14px',
+          fontWeight: '500'
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          resetView();
+        }}
+      >
+        Reset View
+      </button>
       <div 
         className="dice-debug-toggle" 
         style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 1000, pointerEvents: 'auto' }}

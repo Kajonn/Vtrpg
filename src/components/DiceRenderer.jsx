@@ -94,7 +94,7 @@ export const DIE_SCALES = {
   8: 90,
   10: 90,
   12: 90,
-  20: 128,
+  20: 95,
 };
 
 export const DIE_DENSITIES = {
@@ -103,7 +103,7 @@ export const DIE_DENSITIES = {
   8: 8,
   10: 8,
   12: 9,
-  20: 10,
+  20: 9,
 };
 
 export const DIE_MODEL_PATHS = {
@@ -353,6 +353,19 @@ export const setupScene = (canvas, width = ARENA_WIDTH, height = ARENA_HEIGHT) =
   const directional = new THREE.DirectionalLight(0xffffff, 0.9);
   directional.position.set(120, -80, 300);
   directional.castShadow = true;
+  
+  // Configure shadow camera to cover the arena
+  directional.shadow.camera.left = -ARENA_WIDTH / 2;
+  directional.shadow.camera.right = ARENA_WIDTH / 2;
+  directional.shadow.camera.top = ARENA_HEIGHT / 2;
+  directional.shadow.camera.bottom = -ARENA_HEIGHT / 2;
+  directional.shadow.camera.near = 1;
+  directional.shadow.camera.far = 1000;
+  
+  // Shadow quality
+  directional.shadow.mapSize.width = 2048;
+  directional.shadow.mapSize.height = 2048;
+  directional.shadow.bias = -0.0001;
 
   scene.add(ambient);
   scene.add(directional);

@@ -163,7 +163,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
         },
         velocity: {
-          x: randomInRange(rng, -450, 450),
+          x: randomInRange(rng, -600, 900),
           y: randomInRange(rng, 320, 620),
           z: randomInRange(rng, 0, 0),
         },
