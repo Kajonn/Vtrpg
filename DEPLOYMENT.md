@@ -56,7 +56,16 @@ gcloud artifacts repositories create vtrpg-repo \
   --description="Vtrpg Docker images"
 ```
 
-### 4. Configure Docker Authentication
+### 4. Create Cloud Storage Bucket for Uploads
+
+```bash
+# Create a bucket for persistent file storage
+gcloud storage buckets create gs://vttrpg_storage \
+  --location=us-central1 \
+  --uniform-bucket-level-access
+```
+
+### 5. Configure Docker Authentication
 
 ```bash
 # Configure Docker to use gcloud as a credential helper
@@ -102,6 +111,8 @@ gcloud run deploy vtrpg \
   --allow-unauthenticated \
   --port=8080 \
   --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=512Mi \
   --cpu=1 \
   --min-instances=0 \
@@ -171,23 +182,26 @@ gcloud run services update vtrpg \
 
 ### Important Notes on Cloud Run
 
-**Stateless Nature**: Cloud Run is stateless, meaning uploaded files stored in the container's filesystem will be lost when:
-- The container is restarted
-- The service scales down to zero
-- A new revision is deployed
+**Persistent Storage**: This deployment uses Cloud Storage FUSE to mount the `vttrpg_storage` bucket at `/data/uploads`. Uploaded files are automatically persisted to Cloud Storage and preserved across:
+- Container restarts
+- Service scaling (including scale to zero)
+- New revision deployments
 
-**Solutions for Persistent Storage**:
+**Storage Bucket**: The bucket `vttrpg_storage` must exist before deploying. Create it with:
+```bash
+gcloud storage buckets create gs://vttrpg_storage \
+  --location=us-central1 \
+  --uniform-bucket-level-access
+```
 
-1. **Google Cloud Storage** (Recommended):
-   - Modify the upload handler to use Cloud Storage SDK
-   - Store files in a GCS bucket
+**Alternative Storage Options**:
+
+1. **Google Cloud Storage SDK** (for advanced use cases):
+   - Modify the upload handler to use Cloud Storage SDK directly
    - Serve files via signed URLs or Cloud CDN
+   - More control over access patterns and caching
 
-2. **Cloud Run with Persistent Volumes**:
-   - Mount a Cloud Storage FUSE volume
-   - Configure in your Cloud Run service
-
-3. **Alternative Compute Options**:
+2. **Different Compute Options**:
    - **Google Kubernetes Engine (GKE)**: Full Kubernetes with persistent volumes
    - **Compute Engine**: Traditional VM with persistent disks
 
@@ -199,6 +213,8 @@ Adjust Cloud Run resources based on your needs:
 # For higher traffic or larger files
 gcloud run deploy vtrpg \
   --image=us-central1-docker.pkg.dev/YOUR_PROJECT_ID/vtrpg-repo/vtrpg:latest \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=1Gi \
   --cpu=2 \
   --min-instances=1 \

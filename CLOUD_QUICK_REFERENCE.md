@@ -20,6 +20,11 @@ gcloud artifacts repositories create vtrpg-repo \
   --location=us-central1 \
   --description="Vtrpg Docker images"
 
+# Create Cloud Storage bucket for uploads
+gcloud storage buckets create gs://vttrpg_storage \
+  --location=us-central1 \
+  --uniform-bucket-level-access
+
 # Configure Docker
 gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
@@ -37,7 +42,9 @@ gcloud run deploy vtrpg \
   --region=us-central1 \
   --platform=managed \
   --allow-unauthenticated \
-  --port=8080
+  --port=8080 \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume-mount=volume=uploads,mount-path=/data/uploads
 
 # Option 3: Build and deploy in one command
 gcloud builds submit --config=cloudbuild.deploy.yaml

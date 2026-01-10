@@ -94,7 +94,14 @@ The build will:
 
 ### Deploying to Cloud Run (Optional)
 
-After building the image, deploy it to Cloud Run for a fully managed, serverless deployment:
+After building the image, deploy it to Cloud Run for a fully managed, serverless deployment.
+
+**Prerequisites**: Create a Cloud Storage bucket for persistent uploads:
+```bash
+gcloud storage buckets create gs://vttrpg_storage --location=us-central1
+```
+
+Deploy the service with the mounted storage bucket:
 
 ```bash
 gcloud run deploy vtrpg \
@@ -104,16 +111,15 @@ gcloud run deploy vtrpg \
   --allow-unauthenticated \
   --port=8080 \
   --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=512Mi \
   --cpu=1 \
   --min-instances=0 \
   --max-instances=10
 ```
 
-**Note on persistent storage**: Cloud Run is stateless, so uploaded files will be lost when containers restart. For production use, consider:
-- Using Google Cloud Storage for file uploads
-- Mounting a persistent volume (Cloud Run with volumes)
-- Using a different compute option like GKE or Compute Engine
+**Storage Configuration**: The service mounts the Cloud Storage bucket `vttrpg_storage` at `/data/uploads` for persistent file storage. Uploaded files are preserved across container restarts and deployments.
 
 ### Automatic Builds with GitHub
 
