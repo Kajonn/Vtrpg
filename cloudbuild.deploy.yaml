@@ -1,19 +1,22 @@
-# Google Cloud Build configuration for Vtrpg with automatic Cloud Run deployment
-# This configuration builds the Docker image and deploys it to Cloud Run automatically
-# 
+# Google Cloud Build configuration for Vtrpg with automatic Cloud Run
+# deployment. This configuration builds the Docker image and deploys it to
+# Cloud Run automatically
+#
 # Prerequisites:
-# - Enable Cloud Build API, Artifact Registry API, and Cloud Run API in your GCP project
+# - Enable Cloud Build API, Artifact Registry API, and Cloud Run API in your
+#   GCP project
 # - Create an Artifact Registry repository
 # - Grant Cloud Build service account permission to deploy to Cloud Run:
 #   gcloud projects add-iam-policy-binding PROJECT_ID \
 #     --member=serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com \
 #     --role=roles/run.admin
-# - Grant Cloud Build service account permission to act as the Cloud Run runtime service account:
+# - Grant Cloud Build service account permission to act as the Cloud Run
+#   runtime service account:
 #   gcloud iam service-accounts add-iam-policy-binding \
 #     PROJECT_NUMBER-compute@developer.gserviceaccount.com \
 #     --member=serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com \
 #     --role=roles/iam.serviceAccountUser
-# 
+#
 # To manually trigger a build with deployment:
 #   gcloud builds submit --config=cloudbuild.deploy.yaml .
 
@@ -56,7 +59,9 @@ steps:
       - '--platform=managed'
       - '--allow-unauthenticated'
       - '--port=8080'
-      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads'
+      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},\
+MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,\
+UPLOAD_DIR=/data/uploads'
       - '--memory=${_MEMORY}'
       - '--cpu=${_CPU}'
       - '--min-instances=${_MIN_INSTANCES}'

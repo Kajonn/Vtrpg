@@ -1,11 +1,12 @@
 # Google Cloud Build configuration for Vtrpg
 # This configuration builds the Docker image and pushes it to Artifact Registry
-# 
+#
 # Prerequisites:
 # - Enable Cloud Build API in your GCP project
 # - Enable Artifact Registry API (or Container Registry API)
-# - Create an Artifact Registry repository (recommended) or use Container Registry
-# 
+# - Create an Artifact Registry repository (recommended) or use
+#   Container Registry
+#
 # To manually trigger a build:
 #   gcloud builds submit --config=cloudbuild.yaml .
 #
@@ -52,7 +53,8 @@ steps:
   #     - '--platform=managed'
   #     - '--allow-unauthenticated'
   #     - '--port=8080'
-  #     - '--set-env-vars=ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads'
+  #     - '--set-env-vars=ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,\
+  #FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads'
   #     - '--memory=512Mi'
   #     - '--cpu=1'
   #     - '--min-instances=0'
