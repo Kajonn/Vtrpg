@@ -235,6 +235,10 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "createdBy is required"})
 			return
 		}
+		if !isValidName(createdBy) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "createdBy must be 2-32 characters and include only letters, numbers, spaces, hyphens, underscores, or apostrophes"})
+			return
+		}
 		room, err := s.createRoom(name, createdBy)
 		if err != nil {
 			s.logger.Error("create room", slog.String("error", err.Error()))
