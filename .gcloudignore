@@ -1,0 +1,72 @@
+# .gcloudignore
+# Specifies intentionally untracked files that Cloud Build should ignore
+# Similar to .dockerignore, but for gcloud builds submit
+
+# Git files
+.git
+.gitignore
+.github/
+
+# Node modules (will be installed during build)
+node_modules/
+frontend/node_modules/
+
+# Build outputs (will be created during build)
+dist/
+frontend/build/
+server
+/server
+
+# Test outputs and artifacts
+test-results/
+test-output.txt
+test-upload.txt
+playwright-report/
+.playwright/
+
+# Uploads directory (user data, not part of build)
+uploads/
+/data/
+
+# Development files
+.vscode/
+.codex/
+*.log
+server.log
+npm-debug.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database files (if any)
+*.db
+*.sqlite
+
+# Docker files (Cloud Build uses its own Docker)
+# Note: Keep Dockerfile and .dockerignore as they're needed for the build
+docker-compose.yml
+
+# Lock files are needed for reproducible builds
+# Don't ignore package-lock.json or go.sum
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+
+# Documentation (not needed for build, but keep README.md for reference)
+# AGENTS.md
+# docs/
+
+# IDE files
+*.swp
+*.swo
+*~
+.idea/
