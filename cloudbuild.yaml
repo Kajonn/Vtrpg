@@ -53,8 +53,11 @@ steps:
   #     - '--platform=managed'
   #     - '--allow-unauthenticated'
   #     - '--port=8080'
-  #     - '--set-env-vars=ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,\
-  #FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads'
+  #     # Environment variables (one per line for readability):
+  #     - '--set-env-vars=ALLOWED_ORIGINS=*'
+  #     - '--update-env-vars=MAX_UPLOAD_SIZE=10485760'
+  #     - '--update-env-vars=FRONTEND_DIR=/app/dist'
+  #     - '--update-env-vars=UPLOAD_DIR=/data/uploads'
   #     - '--memory=512Mi'
   #     - '--cpu=1'
   #     - '--min-instances=0'
