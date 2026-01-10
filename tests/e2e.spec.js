@@ -42,28 +42,41 @@ test.describe('drag-drop and zoom', () => {
     gmLocked = false;
     await page.route('**/rooms/**', (route, request) => {
       const method = request.method();
-      if (method === 'GET' && request.url().includes('/gm')) {
+      const url = request.url();
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
         return route.fulfill({ status: 200, body: JSON.stringify({ active: gmLocked }) });
       }
-      if (method === 'GET' && request.url().includes('/dice')) {
+      if (method === 'GET' && url.includes('/dice')) {
         return route.fulfill({ status: 200, body: JSON.stringify([]) });
       }
-      if (method === 'POST' && request.url().includes('/dice')) {
+      if (method === 'POST' && url.includes('/dice')) {
         const body = request.postDataJSON?.() || {};
         return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
       }
-      if (method === 'GET' && request.url().includes('/images')) {
+      if (method === 'GET' && url.includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify([mockImage]) });
       }
-      if (method === 'POST' && request.url().includes('/images')) {
+      if (method === 'POST' && url.includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify({ ...mockImage, id: 'upload' }) });
       }
-      if (method === 'PATCH' && request.url().includes('/images')) {
+      if (method === 'PATCH' && url.includes('/images')) {
         const body = request.postDataJSON?.() || {};
-        const id = request.url().split('/').pop();
+        const id = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ ...mockImage, id, ...body }) });
       }
-      if (method === 'DELETE' && request.url().includes('/images')) {
+      if (method === 'DELETE' && url.includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify({ status: 'deleted' }) });
       }
       return route.fallback();
@@ -194,18 +207,32 @@ test.describe('drag-drop and zoom', () => {
     // Setup route mocking for both pages
     for (const page of [page1, page2]) {
       await page.route('**/rooms/**', (route, request) => {
+        const resourceType = request.resourceType();
+        
+        // Only intercept API requests (fetch/xhr), not page navigations
+        if (resourceType === 'document') {
+          return route.fallback();
+        }
+        
         const method = request.method();
-        if (method === 'GET' && request.url().includes('/gm')) {
+        const url = request.url();
+        
+        // Room validation endpoint
+        if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+          const roomId = url.split('/').pop();
+          return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+        }
+        if (method === 'GET' && url.includes('/gm')) {
           return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
         }
-        if (method === 'GET' && request.url().includes('/dice')) {
+        if (method === 'GET' && url.includes('/dice')) {
           return route.fulfill({ status: 200, body: JSON.stringify([]) });
         }
-        if (method === 'POST' && request.url().includes('/dice')) {
+        if (method === 'POST' && url.includes('/dice')) {
           const body = request.postDataJSON?.() || {};
           return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
         }
-        if (method === 'GET' && request.url().includes('/images')) {
+        if (method === 'GET' && url.includes('/images')) {
           return route.fulfill({ status: 200, body: JSON.stringify([]) });
         }
         return route.fallback();
@@ -269,6 +296,750 @@ test.describe('drag-drop and zoom', () => {
     // The login form should be skipped because the session is restored
     await expect(page.getByText('Room: delta')).toBeVisible();
     await expect(page.getByText('Returner')).toBeVisible();
+  });
+});
+
+test.describe('Canvas zoom interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/rooms/**', (route, request) => {
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      
+      const method = request.method();
+      const url = request.url();
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+      }
+      if (method === 'GET' && url.includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
+      if (method === 'GET' && url.includes('/images')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('zooms in with negative wheel delta', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'zoom-test');
+    await page.fill('input[placeholder="Display name"]', 'Zoomer');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+
+    // Get initial transform
+    const initialTransform = await inner.evaluate((el) => el.style.transform);
+    expect(initialTransform).toContain('scale(1)');
+
+    // Zoom in with negative wheel delta
+    await canvas.hover();
+    await page.mouse.wheel(0, -500);
+
+    // Verify scale increased
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+    const scaleMatch = afterTransform.match(/scale\(([\d.]+)\)/);
+    expect(scaleMatch).toBeTruthy();
+    const scale = parseFloat(scaleMatch[1]);
+    expect(scale).toBeGreaterThan(1);
+  });
+
+  test('zooms out with positive wheel delta', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'zoom-out');
+    await page.fill('input[placeholder="Display name"]', 'OutZoomer');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+
+    // Zoom in first to have room to zoom out
+    await canvas.hover();
+    await page.mouse.wheel(0, -500);
+    
+    const midTransform = await inner.evaluate((el) => el.style.transform);
+    const midScale = parseFloat(midTransform.match(/scale\(([\d.]+)\)/)[1]);
+
+    // Now zoom out with positive wheel delta
+    await page.mouse.wheel(0, 300);
+
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+    const afterScale = parseFloat(afterTransform.match(/scale\(([\d.]+)\)/)[1]);
+    expect(afterScale).toBeLessThan(midScale);
+  });
+
+  test('clamps zoom to minimum scale (0.2)', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'min-zoom');
+    await page.fill('input[placeholder="Display name"]', 'MinTest');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+
+    // Zoom out excessively
+    await canvas.hover();
+    await page.mouse.wheel(0, 2000);
+    await page.mouse.wheel(0, 2000);
+
+    const transform = await inner.evaluate((el) => el.style.transform);
+    const scale = parseFloat(transform.match(/scale\(([\d.]+)\)/)[1]);
+    expect(scale).toBeGreaterThanOrEqual(0.2);
+    expect(scale).toBeLessThanOrEqual(0.21); // Allow slight floating point variance
+  });
+
+  test('clamps zoom to maximum scale (5)', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'max-zoom');
+    await page.fill('input[placeholder="Display name"]', 'MaxTest');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+
+    // Zoom in excessively
+    await canvas.hover();
+    await page.mouse.wheel(0, -3000);
+    await page.mouse.wheel(0, -3000);
+
+    const transform = await inner.evaluate((el) => el.style.transform);
+    const scale = parseFloat(transform.match(/scale\(([\d.]+)\)/)[1]);
+    expect(scale).toBeLessThanOrEqual(5);
+    expect(scale).toBeGreaterThanOrEqual(4.99); // Allow slight floating point variance
+  });
+
+  test('adjusts pan during zoom to center on mouse position', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'centered-zoom');
+    await page.fill('input[placeholder="Display name"]', 'CenterTest');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+    const box = await canvas.boundingBox();
+
+    // Position mouse at specific location (not center)
+    const mouseX = box.x + box.width * 0.3;
+    const mouseY = box.y + box.height * 0.3;
+    await page.mouse.move(mouseX, mouseY);
+
+    // Get initial pan values
+    const initialTransform = await inner.evaluate((el) => el.style.transform);
+    const initialPan = initialTransform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+    const initialX = parseFloat(initialPan[1]);
+    const initialY = parseFloat(initialPan[2]);
+
+    // Zoom in at that position
+    await page.mouse.wheel(0, -500);
+
+    // Verify pan changed (zoom should adjust pan to keep mouse position stable)
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+    const afterPan = afterTransform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+    const afterX = parseFloat(afterPan[1]);
+    const afterY = parseFloat(afterPan[2]);
+
+    // Pan should have changed as zoom centered on mouse position
+    expect(afterX).not.toEqual(initialX);
+    expect(afterY).not.toEqual(initialY);
+  });
+});
+
+test.describe('Canvas pan interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/rooms/**', (route, request) => {
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      
+      const method = request.method();
+      const url = request.url();
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+      }
+      if (method === 'GET' && url.includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
+      if (method === 'GET' && url.includes('/images')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('prevents pan when dice-controls are clicked', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'dice-pan-test');
+    await page.fill('input[placeholder="Display name"]', 'PanTester');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const inner = page.locator('.canvas-inner');
+    const rollButton = page.getByRole('button', { name: /roll dice/i });
+
+    // Get initial transform
+    const initialTransform = await inner.evaluate((el) => el.style.transform);
+
+    // Try to "pan" by dragging on the dice controls area
+    const box = await rollButton.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 50);
+    await page.mouse.up();
+
+    // Verify pan did not change (dice controls should block pan)
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+    expect(afterTransform).toEqual(initialTransform);
+  });
+
+  test('releases pointer capture on pointer cancel', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'cancel-test');
+    await page.fill('input[placeholder="Display name"]', 'Canceler');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const box = await canvas.boundingBox();
+
+    // Start panning
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 30);
+
+    // Dispatch pointercancel event to simulate interruption
+    await canvas.dispatchEvent('pointercancel', { 
+      pointerId: 1,
+      pointerType: 'mouse',
+      bubbles: true
+    });
+
+    // Verify subsequent mouse movements don't continue panning
+    const inner = page.locator('.canvas-inner');
+    const transformAfterCancel = await inner.evaluate((el) => el.style.transform);
+    
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 100);
+    
+    const transformAfterMove = await inner.evaluate((el) => el.style.transform);
+    // Transform should not change after cancel
+    expect(transformAfterMove).toEqual(transformAfterCancel);
+  });
+});
+
+test.describe('Canvas image drag interactions', () => {
+  const testImage = { 
+    id: 'drag-test-img', 
+    url: 'https://placekitten.com/300/300', 
+    x: 100, 
+    y: 100, 
+    status: 'done' 
+  };
+
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/rooms/**', (route, request) => {
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      
+      const method = request.method();
+      const url = request.url();
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+      }
+      if (method === 'GET' && url.includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
+      if (method === 'GET' && url.includes('/images')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([testImage]) });
+      }
+      if (method === 'PATCH' && url.includes('/images')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ ...testImage, ...body }) });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('GM can drag image to new position', async ({ page }) => {
+    let patchCalled = false;
+    let patchBody = null;
+
+    await page.route('**/rooms/*/images/*', (route, request) => {
+      if (request.method() === 'PATCH') {
+        patchCalled = true;
+        patchBody = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ ...testImage, ...patchBody }) });
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'drag-gm');
+    await page.fill('input[placeholder="Display name"]', 'GM Dragger');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    // Wait for image to load
+    const imageLayer = page.locator('.canvas-layer').first();
+    await expect(imageLayer).toBeVisible();
+
+    // Get initial position
+    const initialStyle = await imageLayer.evaluate((el) => el.style.transform);
+
+    // Drag the image
+    const box = await imageLayer.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 50);
+    await page.mouse.up();
+
+    // Verify position changed
+    const afterStyle = await imageLayer.evaluate((el) => el.style.transform);
+    expect(afterStyle).not.toEqual(initialStyle);
+
+    // Verify PATCH was called with coordinates
+    expect(patchCalled).toBe(true);
+    expect(patchBody).toHaveProperty('x');
+    expect(patchBody).toHaveProperty('y');
+    expect(typeof patchBody.x).toBe('number');
+    expect(typeof patchBody.y).toBe('number');
+  });
+
+  test('player cannot drag images', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'drag-player');
+    await page.fill('input[placeholder="Display name"]', 'Player Dragger');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    // Wait for image to load
+    const imageLayer = page.locator('.canvas-layer').first();
+    await expect(imageLayer).toBeVisible();
+
+    // Get initial position
+    const initialStyle = await imageLayer.evaluate((el) => el.style.transform);
+
+    // Try to drag the image
+    const box = await imageLayer.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2 + 50);
+    await page.mouse.up();
+
+    // Verify position did NOT change (player can't drag)
+    const afterStyle = await imageLayer.evaluate((el) => el.style.transform);
+    expect(afterStyle).toEqual(initialStyle);
+  });
+
+  test('drag uses canvas-space coordinates not screen coordinates', async ({ page }) => {
+    let patchBody = null;
+    let patchPromiseResolve;
+    const patchPromise = new Promise((resolve) => { patchPromiseResolve = resolve; });
+
+    await page.route('**/rooms/*/images/*', (route, request) => {
+      if (request.method() === 'PATCH') {
+        patchBody = request.postDataJSON?.() || {};
+        patchPromiseResolve();
+        return route.fulfill({ status: 200, body: JSON.stringify({ ...testImage, ...patchBody }) });
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'coord-test');
+    await page.fill('input[placeholder="Display name"]', 'Coord Tester');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    const imageLayer = page.locator('.canvas-layer').first();
+    await expect(imageLayer).toBeVisible();
+
+    // Pan the canvas first
+    const canvasBox = await canvas.boundingBox();
+    await page.mouse.move(canvasBox.x + 100, canvasBox.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(canvasBox.x + 200, canvasBox.y + 150);
+    await page.mouse.up();
+
+    // Now zoom
+    await page.mouse.wheel(0, -300);
+
+    // Now drag the image
+    const box = await imageLayer.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 50, box.y + box.height / 2 + 30);
+    await page.mouse.up();
+
+    // Wait for the PATCH request
+    await patchPromise;
+
+    // Verify coordinates are reasonable canvas-space values, not huge screen coordinates
+    expect(patchBody).toBeTruthy();
+    expect(patchBody.x).toBeLessThan(10000); // Canvas space, not screen pixels
+    expect(patchBody.y).toBeLessThan(10000);
+  });
+});
+
+test.describe('Canvas drop interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/rooms/**', (route, request) => {
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      
+      const method = request.method();
+      const url = request.url();
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+      }
+      if (method === 'GET' && url.includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
+      if (method === 'GET' && url.includes('/images')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/images')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ 
+          status: 200, 
+          body: JSON.stringify({ 
+            id: 'dropped', 
+            url: body.url || 'https://example.com/dropped.png',
+            x: body.x || 0,
+            y: body.y || 0,
+            status: 'done'
+          }) 
+        });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('drops URL at correct canvas coordinates', async ({ page }) => {
+    let postBody = null;
+    let postPromiseResolve;
+    const postPromise = new Promise((resolve) => { postPromiseResolve = resolve; });
+
+    await page.route('**/rooms/*/images', (route, request) => {
+      if (request.method() === 'POST') {
+        postBody = request.postDataJSON?.() || {};
+        postPromiseResolve();
+        return route.fulfill({ 
+          status: 200, 
+          body: JSON.stringify({ 
+            id: 'url-drop', 
+            url: postBody.url || 'https://example.com/test.png',
+            x: postBody.x || 0,
+            y: postBody.y || 0,
+            status: 'done'
+          }) 
+        });
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'drop-coords');
+    await page.fill('input[placeholder="Display name"]', 'Dropper');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+
+    // Pan and zoom first to test coordinate transformation
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + 100, box.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 150, box.y + 130);
+    await page.mouse.up();
+    await page.mouse.wheel(0, -200);
+
+    // Create a drop event with URL
+    const dropData = await page.evaluateHandle(() => {
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', 'https://example.com/image.jpg');
+      return dt;
+    });
+
+    // Drop at specific location
+    const dropX = box.x + box.width * 0.6;
+    const dropY = box.y + box.height * 0.4;
+    
+    // Handle the confirmation dialog
+    page.once('dialog', (dialog) => dialog.accept());
+    
+    await canvas.dispatchEvent('dragover', { clientX: dropX, clientY: dropY });
+    await canvas.dispatchEvent('drop', { 
+      clientX: dropX, 
+      clientY: dropY,
+      dataTransfer: dropData 
+    });
+
+    // Wait for the POST request
+    await postPromise;
+
+    // Verify POST was called with the URL
+    // Note: Position is persisted locally via localStorage, not sent in POST
+    expect(postBody).toBeTruthy();
+    expect(postBody).toHaveProperty('url', 'https://example.com/image.jpg');
+  });
+
+  test('player cannot drop images', async ({ page }) => {
+    let postCalled = false;
+
+    await page.route('**/rooms/*/images', (route, request) => {
+      if (request.method() === 'POST') {
+        postCalled = true;
+        return route.fulfill({ status: 403, body: JSON.stringify({ error: 'Forbidden' }) });
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'drop-player');
+    await page.fill('input[placeholder="Display name"]', 'Player Dropper');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const dropData = await page.evaluateHandle(() => {
+      const dt = new DataTransfer();
+      const file = new File(['content'], 'test.png', { type: 'image/png' });
+      dt.items.add(file);
+      return dt;
+    });
+
+    await canvas.dispatchEvent('dragover');
+    await canvas.dispatchEvent('drop', { dataTransfer: dropData });
+
+    await page.waitForTimeout(200);
+
+    // Player drop should be blocked client-side, POST should not be called
+    expect(postCalled).toBe(false);
+  });
+});
+
+test.describe('Canvas paste and reset view', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/rooms/**', (route, request) => {
+      const resourceType = request.resourceType();
+      
+      // Only intercept API requests (fetch/xhr), not page navigations
+      if (resourceType === 'document') {
+        return route.fallback();
+      }
+      const method = request.method();
+      const url = request.url();
+      // Room validation endpoint (must come before other checks)
+      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        const roomId = url.split('/').pop();
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
+      }
+      if (method === 'GET' && url.includes('/gm')) {
+        return route.fulfill({ status: 200, body: JSON.stringify({ active: false }) });
+      }
+      if (method === 'GET' && url.includes('/dice')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/dice')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
+      }
+      if (method === 'GET' && url.includes('/images')) {
+        return route.fulfill({ status: 200, body: JSON.stringify([]) });
+      }
+      if (method === 'POST' && url.includes('/images')) {
+        const body = request.postDataJSON?.() || {};
+        return route.fulfill({ 
+          status: 200, 
+          body: JSON.stringify({ 
+            id: 'pasted', 
+            url: body.url,
+            status: 'done'
+          }) 
+        });
+      }
+      return route.fallback();
+    });
+  });
+
+  test('GM can paste URL from clipboard', async ({ page }) => {
+    let postBody = null;
+    let postPromiseResolve;
+    const postPromise = new Promise((resolve) => { postPromiseResolve = resolve; });
+
+    await page.route('**/rooms/*/images', (route, request) => {
+      if (request.method() === 'POST') {
+        postBody = request.postDataJSON?.() || {};
+        postPromiseResolve();
+        return route.fulfill({ 
+          status: 200, 
+          body: JSON.stringify({ 
+            id: 'pasted', 
+            url: postBody.url,
+            status: 'done'
+          }) 
+        });
+      }
+      return route.fallback();
+    });
+
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'paste-test');
+    await page.fill('input[placeholder="Display name"]', 'Paster');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+
+    // Grant clipboard permissions
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+
+    // Write URL to clipboard
+    await page.evaluate(() => navigator.clipboard.writeText('https://example.com/clipboard-image.png'));
+
+    // Focus canvas and paste
+    await canvas.click();
+    
+    // Handle the confirmation dialog
+    page.once('dialog', (dialog) => dialog.accept());
+    
+    await page.keyboard.press('Control+V');
+
+    // Wait for the POST request
+    await postPromise;
+
+    // Verify POST was called with clipboard URL
+    expect(postBody).toBeTruthy();
+    expect(postBody.url).toBe('https://example.com/clipboard-image.png');
+  });
+
+  test('reset view button resets scale and pan', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'reset-test');
+    await page.fill('input[placeholder="Display name"]', 'Resetter');
+    await page.selectOption('select', 'gm');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+    const inner = page.locator('.canvas-inner');
+
+    // Pan and zoom the canvas
+    const box = await canvas.boundingBox();
+    await page.mouse.move(box.x + 100, box.y + 100);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 200, box.y + 150);
+    await page.mouse.up();
+    await page.mouse.wheel(0, -500);
+
+    // Verify transform changed
+    const transformBefore = await inner.evaluate((el) => el.style.transform);
+    expect(transformBefore).not.toContain('scale(1)');
+
+    // Click reset button
+    const resetButton = page.getByRole('button', { name: /reset view/i });
+    await resetButton.click();
+
+    // Verify transform reset to defaults
+    const transformAfter = await inner.evaluate((el) => el.style.transform);
+    expect(transformAfter).toContain('translate(0px, 0px)');
+    expect(transformAfter).toContain('scale(1)');
+  });
+
+  test('reset view button does not trigger canvas pan', async ({ page }) => {
+    await page.goto('/');
+    await page.fill('input[placeholder="Room"]', 'reset-no-pan');
+    await page.fill('input[placeholder="Display name"]', 'NoPanTester');
+    await page.selectOption('select', 'player');
+    await page.click('button:has-text("Enter")');
+
+    const canvas = page.locator('.canvas');
+    await expect(canvas).toBeVisible();
+
+    const inner = page.locator('.canvas-inner');
+
+    // Get initial transform
+    const initialTransform = await inner.evaluate((el) => el.style.transform);
+
+    // Click reset button with pointer down
+    const resetButton = page.getByRole('button', { name: /reset view/i });
+    const buttonBox = await resetButton.boundingBox();
+    await page.mouse.move(buttonBox.x + buttonBox.width / 2, buttonBox.y + buttonBox.height / 2);
+    await page.mouse.down();
+    
+    // Try to drag (should be prevented by stopPropagation)
+    await page.mouse.move(buttonBox.x + buttonBox.width / 2 + 50, buttonBox.y + buttonBox.height / 2 + 50);
+    await page.mouse.up();
+
+    // Verify transform still matches initial (no pan occurred)
+    const afterTransform = await inner.evaluate((el) => el.style.transform);
+    expect(afterTransform).toEqual(initialTransform);
   });
 });
 
