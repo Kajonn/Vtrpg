@@ -51,6 +51,100 @@ docker compose up --build
 
 Uploads are stored in the `uploads` directory (or the mounted volume) and served under `/uploads/`.
 
+## Deployment to Google Cloud
+
+This project includes Cloud Build configuration for easy deployment to Google Cloud Platform.
+
+### Prerequisites
+
+1. **Google Cloud Project**: Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. **gcloud CLI**: Install and authenticate the [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+3. **Enable APIs**: Enable the following APIs in your project:
+   ```bash
+   gcloud services enable cloudbuild.googleapis.com
+   gcloud services enable artifactregistry.googleapis.com
+   gcloud services enable run.googleapis.com  # If deploying to Cloud Run
+   ```
+4. **Artifact Registry**: Create a Docker repository:
+   ```bash
+   gcloud artifacts repositories create vtrpg-repo \
+     --repository-format=docker \
+     --location=us-central1 \
+     --description="Vtrpg Docker images"
+   ```
+
+### Manual Deployment
+
+Build and push the Docker image using Cloud Build:
+
+```bash
+# Set your project ID
+export PROJECT_ID=your-project-id
+
+# Submit the build
+gcloud builds submit --config=cloudbuild.yaml \
+  --substitutions=_REGION=us-central1,_REPOSITORY=vtrpg-repo
+```
+
+The build will:
+1. Build the frontend assets using Node.js
+2. Compile the Go backend
+3. Create a Docker image
+4. Push the image to Artifact Registry with both `:latest` and `:$COMMIT_SHA` tags
+
+### Deploying to Cloud Run (Optional)
+
+After building the image, deploy it to Cloud Run for a fully managed, serverless deployment:
+
+```bash
+gcloud run deploy vtrpg \
+  --image=us-central1-docker.pkg.dev/${PROJECT_ID}/vtrpg-repo/vtrpg:latest \
+  --region=us-central1 \
+  --platform=managed \
+  --allow-unauthenticated \
+  --port=8080 \
+  --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
+  --memory=512Mi \
+  --cpu=1 \
+  --min-instances=0 \
+  --max-instances=10
+```
+
+**Note on persistent storage**: Cloud Run is stateless, so uploaded files will be lost when containers restart. For production use, consider:
+- Using Google Cloud Storage for file uploads
+- Mounting a persistent volume (Cloud Run with volumes)
+- Using a different compute option like GKE or Compute Engine
+
+### Automatic Builds with GitHub
+
+Set up automatic builds triggered by GitHub commits:
+
+1. Go to [Cloud Build Triggers](https://console.cloud.google.com/cloud-build/triggers) in GCP Console
+2. Click "Connect Repository" and follow the steps to connect your GitHub repository
+3. Create a new trigger:
+   - **Event**: Push to a branch
+   - **Branch**: `^main$` (or your preferred branch)
+   - **Configuration**: Cloud Build configuration file
+   - **Location**: `/cloudbuild.yaml`
+4. Save the trigger
+
+Now every push to the main branch will automatically build and push a new Docker image.
+
+### Environment Variables for Production
+
+For production deployments, configure these environment variables appropriately:
+
+- `ALLOWED_ORIGINS`: Set to your actual domain(s), e.g., `https://yourdomain.com`
+- `MAX_UPLOAD_SIZE`: Adjust based on your needs (default: 10MB)
+- `UPLOAD_DIR`: Ensure this points to persistent storage in production
+
+### Cost Optimization
+
+- Cloud Build offers a free tier (120 build-minutes per day)
+- Cloud Run offers a generous free tier (2 million requests/month)
+- Consider using `--min-instances=0` for Cloud Run to scale to zero when not in use
+- Use `--memory=512Mi` or less to reduce costs (increase only if needed)
+
 ## Frontend features
 
 - Only one game master (GM) can connect to a room at a time; additional GM attempts are blocked until the active GM disconnects.
