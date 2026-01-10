@@ -206,6 +206,61 @@ gcloud run deploy vtrpg \
   --region=us-central1
 ```
 
+## CI/CD with GitHub Actions
+
+The repository includes a GitHub Actions workflow for automated deployments.
+
+### Setup GitHub Actions
+
+1. **Create a GCP Service Account**:
+   ```bash
+   # Create service account
+   gcloud iam service-accounts create github-actions \
+     --display-name="GitHub Actions"
+   
+   # Grant necessary roles
+   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+     --member="serviceAccount:github-actions@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+     --role="roles/cloudbuild.builds.editor"
+   
+   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+     --member="serviceAccount:github-actions@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+     --role="roles/run.admin"
+   
+   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+     --member="serviceAccount:github-actions@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+     --role="roles/iam.serviceAccountUser"
+   
+   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+     --member="serviceAccount:github-actions@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+     --role="roles/artifactregistry.writer"
+   ```
+
+2. **Create and Download Service Account Key**:
+   ```bash
+   gcloud iam service-accounts keys create github-actions-key.json \
+     --iam-account=github-actions@YOUR_PROJECT_ID.iam.gserviceaccount.com
+   ```
+
+3. **Add Secrets to GitHub Repository**:
+   - Go to your repository settings → Secrets and variables → Actions
+   - Add the following secrets:
+     - `GCP_PROJECT_ID`: Your Google Cloud project ID
+     - `GCP_SA_KEY`: Contents of the `github-actions-key.json` file
+     - `ALLOWED_ORIGINS`: Your production domain (e.g., `https://yourdomain.com`)
+
+4. **Trigger Deployment**:
+   - Push to the `main` branch (automatic)
+   - Or manually trigger via Actions tab → "Deploy to Google Cloud" → Run workflow
+
+### Workflow Features
+
+- Automatically deploys on push to main branch
+- Manual deployment option via workflow dispatch
+- Authenticates using Workload Identity or service account key
+- Tags images with commit SHA for traceability
+- Outputs deployment URL in the Actions summary
+
 ## Troubleshooting
 
 ### Build Failures
