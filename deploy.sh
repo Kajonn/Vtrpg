@@ -99,7 +99,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         --allow-unauthenticated \
         --port=8080 \
         --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
-        --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+        --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg-storage \
         --add-volume-mount=volume=uploads,mount-path=/data/uploads \
         --memory=512Mi \
         --cpu=1 \

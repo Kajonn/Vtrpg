@@ -60,7 +60,7 @@ gcloud artifacts repositories create vtrpg-repo \
 
 ```bash
 # Create a bucket for persistent file storage
-gcloud storage buckets create gs://vttrpg_storage \
+gcloud storage buckets create gs://vttrpg-storage \
   --location=us-central1 \
   --uniform-bucket-level-access
 ```
@@ -111,7 +111,7 @@ gcloud run deploy vtrpg \
   --allow-unauthenticated \
   --port=8080 \
   --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
-  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg-storage \
   --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=512Mi \
   --cpu=1 \
@@ -182,14 +182,14 @@ gcloud run services update vtrpg \
 
 ### Important Notes on Cloud Run
 
-**Persistent Storage**: This deployment uses Cloud Storage FUSE to mount the `vttrpg_storage` bucket at `/data/uploads`. Uploaded files are automatically persisted to Cloud Storage and preserved across:
+**Persistent Storage**: This deployment uses Cloud Storage FUSE to mount the `vttrpg-storage` bucket at `/data/uploads`. Uploaded files are automatically persisted to Cloud Storage and preserved across:
 - Container restarts
 - Service scaling (including scale to zero)
 - New revision deployments
 
-**Storage Bucket**: The bucket `vttrpg_storage` must exist before deploying. Create it with:
+**Storage Bucket**: The bucket `vttrpg-storage` must exist before deploying. Create it with:
 ```bash
-gcloud storage buckets create gs://vttrpg_storage \
+gcloud storage buckets create gs://vttrpg-storage \
   --location=us-central1 \
   --uniform-bucket-level-access
 ```
@@ -213,7 +213,7 @@ Adjust Cloud Run resources based on your needs:
 # For higher traffic or larger files
 gcloud run deploy vtrpg \
   --image=us-central1-docker.pkg.dev/YOUR_PROJECT_ID/vtrpg-repo/vtrpg:latest \
-  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg-storage \
   --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=1Gi \
   --cpu=2 \

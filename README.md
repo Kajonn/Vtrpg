@@ -100,7 +100,7 @@ After building the image, deploy it to Cloud Run for a fully managed, serverless
 
 **Prerequisites**: Create a Cloud Storage bucket for persistent uploads:
 ```bash
-gcloud storage buckets create gs://vttrpg_storage --location=us-central1
+gcloud storage buckets create gs://vttrpg-storage --location=us-central1
 ```
 
 Deploy the service with the mounted storage bucket:
@@ -113,7 +113,7 @@ gcloud run deploy vtrpg \
   --allow-unauthenticated \
   --port=8080 \
   --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
-  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg_storage \
+  --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg-storage \
   --add-volume-mount=volume=uploads,mount-path=/data/uploads \
   --memory=512Mi \
   --cpu=1 \
@@ -121,7 +121,7 @@ gcloud run deploy vtrpg \
   --max-instances=10
 ```
 
-**Storage Configuration**: The service mounts the Cloud Storage bucket `vttrpg_storage` at `/data/uploads` for persistent file storage. Uploaded files are preserved across container restarts and deployments.
+**Storage Configuration**: The service mounts the Cloud Storage bucket `vttrpg-storage` at `/data/uploads` for persistent file storage. Uploaded files are preserved across container restarts and deployments.
 
 ### Automatic Builds with GitHub
 

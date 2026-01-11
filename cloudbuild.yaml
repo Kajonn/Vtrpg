@@ -75,7 +75,7 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'vtrpg-repo'
   _SERVICE_NAME: 'vtrpg'
-  _STORAGE_BUCKET: 'vttrpg_storage'
+  _STORAGE_BUCKET: 'vttrpg-storage'
 
 # Build options
 options:
