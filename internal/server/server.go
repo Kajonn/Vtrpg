@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,7 +116,7 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 
-	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 	if token != s.cfg.AdminToken {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -229,6 +231,11 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSpace(payload.Name)
 		if name == "" {
 			name = "Untitled room"
+		}
+		// Validate room name length
+		if utf8.RuneCountInString(name) > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "room name must be 100 characters or less"})
+			return
 		}
 		createdBy := strings.TrimSpace(payload.CreatedBy)
 		if createdBy == "" {
@@ -588,6 +595,11 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		// Validate URL format and scheme
+		if !isValidImageURL(payload.URL) {
+			http.Error(w, "invalid image URL", http.StatusBadRequest)
+			return
+		}
 		x, y, err := s.nextPosition(roomID)
 		if err != nil {
 			s.logger.Error("next position", slog.String("error", err.Error()))
@@ -625,6 +637,16 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 	}
 
 	uploaded := make([]imageResponse, 0)
+	var uploadedPaths []string
+	defer func() {
+		// Clean up uploaded files if we return an error
+		if len(uploadedPaths) > 0 && len(uploaded) == 0 {
+			for _, path := range uploadedPaths {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+
 	for _, fh := range files {
 		file, err := fh.Open()
 		if err != nil {
@@ -645,11 +667,13 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		if _, err := io.Copy(out, file); err != nil {
 			out.Close()
 			file.Close()
+			_ = os.Remove(destPath)
 			http.Error(w, "unable to write file", http.StatusInternalServerError)
 			return
 		}
 		out.Close()
 		file.Close()
+		uploadedPaths = append(uploadedPaths, destPath)
 
 		url := "/uploads/" + uniqueName
 		x, y, err := s.nextPosition(roomID)
@@ -714,6 +738,15 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
+	// Validate position coordinates
+	if payload.X != nil && (math.IsNaN(*payload.X) || math.IsInf(*payload.X, 0)) {
+		http.Error(w, "invalid x coordinate", http.StatusBadRequest)
+		return
+	}
+	if payload.Y != nil && (math.IsNaN(*payload.Y) || math.IsInf(*payload.Y, 0)) {
+		http.Error(w, "invalid y coordinate", http.StatusBadRequest)
+		return
+	}
 	img, ok, err := s.updateImage(roomID, imageID, payload.X, payload.Y)
 	if err != nil {
 		s.logger.Error("update image", slog.String("error", err.Error()))
@@ -745,8 +778,13 @@ func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roo
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if payload.Count <= 0 || len(payload.Results) == 0 {
-		http.Error(w, "missing fields", http.StatusBadRequest)
+	// Validate dice log parameters
+	if payload.Count <= 0 || payload.Count > 1000 {
+		http.Error(w, "invalid dice count", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Results) == 0 || len(payload.Results) > 1000 {
+		http.Error(w, "invalid dice results", http.StatusBadRequest)
 		return
 	}
 
@@ -1849,4 +1887,26 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// isValidImageURL validates that a URL is safe for use as an external image URL.
+// It checks that the URL uses http or https scheme and can be parsed.
+func isValidImageURL(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	return true
+}
+
+// isValidPosition checks if position coordinates are valid finite numbers.
+func isValidPosition(x, y float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0)
 }
