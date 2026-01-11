@@ -654,6 +654,14 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 			return
 		}
 
+		// Check if file supports seeking (required for MIME detection)
+		seeker, canSeek := file.(io.Seeker)
+		if !canSeek {
+			file.Close()
+			http.Error(w, "unable to process file", http.StatusInternalServerError)
+			return
+		}
+
 		// Validate MIME type by detecting content
 		mimeType, err := detectContentType(file, fh.Filename)
 		if err != nil {
@@ -668,12 +676,10 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		}
 
 		// Reset file pointer after reading for type detection
-		if seeker, ok := file.(io.Seeker); ok {
-			if _, err := seeker.Seek(0, 0); err != nil {
-				file.Close()
-				http.Error(w, "unable to process file", http.StatusInternalServerError)
-				return
-			}
+		if _, err := seeker.Seek(0, 0); err != nil {
+			file.Close()
+			http.Error(w, "unable to process file", http.StatusInternalServerError)
+			return
 		}
 
 		safeName := filepath.Base(fh.Filename)
@@ -761,11 +767,11 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 		return
 	}
 	// Validate position coordinates
-	if payload.X != nil && (math.IsNaN(*payload.X) || math.IsInf(*payload.X, 0)) {
+	if payload.X != nil && !isValidCoordinate(*payload.X) {
 		http.Error(w, "invalid x coordinate", http.StatusBadRequest)
 		return
 	}
-	if payload.Y != nil && (math.IsNaN(*payload.Y) || math.IsInf(*payload.Y, 0)) {
+	if payload.Y != nil && !isValidCoordinate(*payload.Y) {
 		http.Error(w, "invalid y coordinate", http.StatusBadRequest)
 		return
 	}
@@ -1931,20 +1937,24 @@ func isValidImageURL(rawURL string) bool {
 	return true
 }
 
+// isValidCoordinate checks if a coordinate value is valid (not NaN or Infinity).
+func isValidCoordinate(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 // isValidPosition checks if position coordinates are valid finite numbers.
 func isValidPosition(x, y float64) bool {
-	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0)
+	return isValidCoordinate(x) && isValidCoordinate(y)
 }
 
 // isAllowedImageType checks if a MIME type is allowed for image uploads.
+// Note: SVG support is disabled due to XSS risks from embedded JavaScript.
 func isAllowedImageType(mimeType string) bool {
 	allowed := []string{
 		"image/jpeg",
-		"image/jpg",
 		"image/png",
 		"image/gif",
 		"image/webp",
-		"image/svg+xml",
 		"image/bmp",
 		"image/tiff",
 	}

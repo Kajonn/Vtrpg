@@ -330,13 +330,13 @@ func TestIsAllowedImageType(t *testing.T) {
 		want     bool
 	}{
 		{"image/jpeg", true},
-		{"image/jpg", true},
 		{"image/png", true},
 		{"image/gif", true},
 		{"image/webp", true},
-		{"image/svg+xml", true},
 		{"image/bmp", true},
 		{"image/tiff", true},
+		{"image/jpg", false},        // Non-standard MIME type
+		{"image/svg+xml", false},    // Security risk - can contain JavaScript
 		{"application/pdf", false},
 		{"text/html", false},
 		{"application/octet-stream", false},
