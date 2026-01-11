@@ -29,7 +29,8 @@ ENV PORT=8080 \
     ALLOWED_ORIGINS=* \
     MAX_UPLOAD_SIZE=10485760 \
     FRONTEND_DIR=/app/dist \
-    UPLOAD_DIR=/data/uploads
+    UPLOAD_DIR=/data/uploads \
+    DB_PATH=/data/vtrpg.db
 
 EXPOSE 8080
 USER app
