@@ -31,7 +31,6 @@ ENV PORT=8080 \
     FRONTEND_DIR=/app/dist \
     UPLOAD_DIR=/data/uploads
 
-VOLUME ["/data/uploads"]
 EXPOSE 8080
 USER app
 ENTRYPOINT ["/usr/local/bin/server"]

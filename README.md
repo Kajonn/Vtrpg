@@ -49,7 +49,9 @@ Or use docker-compose:
 docker compose up --build
 ```
 
-Uploads are stored in the `uploads` directory (or the mounted volume) and served under `/uploads/`.
+**Note**: The Dockerfile creates `/data/uploads` directory for uploads. For local development, mount a volume as shown above. For Cloud Run deployment, the directory is automatically mounted with a Cloud Storage bucket for persistent storage.
+
+Uploads are stored in the `/data/uploads` directory and served under `/uploads/`.
 
 ## Deployment to Google Cloud
 
