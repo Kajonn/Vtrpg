@@ -49,7 +49,7 @@ Or use docker-compose:
 docker compose up --build
 ```
 
-**Note**: The Dockerfile creates `/data/uploads` directory for uploads. For local development, mount a volume as shown above. For Cloud Run deployment, the directory is automatically mounted with a Cloud Storage bucket for persistent storage.
+**Note**: The Dockerfile creates `/data/uploads` directory inside the container for uploads. For local development, use `-v $(pwd)/uploads:/data/uploads` to mount your local `uploads` directory to the container's `/data/uploads` path, ensuring files persist on your host machine. For Cloud Run deployment, the `/data/uploads` directory is automatically mounted with a Cloud Storage bucket for persistent storage.
 
 Uploads are stored in the `/data/uploads` directory and served under `/uploads/`.
 
