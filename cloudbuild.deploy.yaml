@@ -1,0 +1,107 @@
+# Google Cloud Build configuration for Vtrpg with automatic Cloud Run
+# deployment. This configuration builds the Docker image and deploys it to
+# Cloud Run automatically
+#
+# Prerequisites:
+# - Enable Cloud Build API, Artifact Registry API, and Cloud Run API in your
+#   GCP project
+# - Create an Artifact Registry repository
+# - Grant Cloud Build service account permission to deploy to Cloud Run:
+#   gcloud projects add-iam-policy-binding PROJECT_ID \
+#     --member=serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com \
+#     --role=roles/run.admin
+# - Grant Cloud Build service account permission to act as the Cloud Run
+#   runtime service account:
+#   gcloud iam service-accounts add-iam-policy-binding \
+#     PROJECT_NUMBER-compute@developer.gserviceaccount.com \
+#     --member=serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com \
+#     --role=roles/iam.serviceAccountUser
+#
+# To manually trigger a build with deployment:
+#   gcloud builds submit --config=cloudbuild.deploy.yaml .
+
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args:
+      - 'build'
+      - '-t'
+      - '${_IMAGE_NAME}:$COMMIT_SHA'
+      - '-t'
+      - '${_IMAGE_NAME}:latest'
+      - '.'
+    timeout: '1200s'
+
+  # Push the image with commit SHA tag
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image-sha'
+    args:
+      - 'push'
+      - '${_IMAGE_NAME}:$COMMIT_SHA'
+
+  # Push the image with latest tag
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image-latest'
+    args:
+      - 'push'
+      - '${_IMAGE_NAME}:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy-cloud-run'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image=${_IMAGE_NAME}:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads,DB_PATH=/tmp/vtrpg.db'
+      # Mount Cloud Storage bucket for persistent uploads only
+      - '--add-volume=name=uploads,type=cloud-storage,bucket=${_STORAGE_BUCKET}'
+      - '--add-volume-mount=volume=uploads,mount-path=/data/uploads'
+      - '--timeout=300'
+      - '--memory=${_MEMORY}'
+      - '--cpu=${_CPU}'
+      - '--min-instances=${_MIN_INSTANCES}'
+      - '--max-instances=${_MAX_INSTANCES}'
+      - '--timeout=300'
+
+# Substitution variables
+# Override these when running gcloud builds submit with --substitutions
+substitutions:
+  _IMAGE_NAME: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/vtrpg'
+  _REGION: 'us-central1'
+  _REPOSITORY: 'vtrpg-repo'
+  _SERVICE_NAME: 'vtrpg'
+  _ALLOWED_ORIGINS: '*'
+  _MAX_UPLOAD_SIZE: '10485760'
+  _MEMORY: '512Mi'
+  _CPU: '1'
+  _MIN_INSTANCES: '0'
+  _MAX_INSTANCES: '10'
+  _STORAGE_BUCKET: 'vttrpg-storage'
+
+# Build options
+options:
+  machineType: 'N1_HIGHCPU_8'
+  diskSizeGb: 100
+  dynamic_substitutions: true
+  logging: CLOUD_LOGGING_ONLY
+
+# Build timeout (20 minutes)
+timeout: '1200s'
+
+# Images to be pushed to the registry
+images:
+  - '${_IMAGE_NAME}:$COMMIT_SHA'
+  - '${_IMAGE_NAME}:latest'
+
+# Tags for organizing builds
+tags:
+  - 'vtrpg'
+  - 'cloud-run'
+  - 'deployment'
