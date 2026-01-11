@@ -59,10 +59,11 @@ steps:
       - '--platform=managed'
       - '--allow-unauthenticated'
       - '--port=8080'
-      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads,DB_PATH=/data/vtrpg.db'
-      # Mount Cloud Storage bucket for persistent uploads
+      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads,DB_PATH=/tmp/vtrpg.db'
+      # Mount Cloud Storage bucket for persistent uploads only
       - '--add-volume=name=uploads,type=cloud-storage,bucket=${_STORAGE_BUCKET}'
-      - '--add-volume-mount=volume=uploads,mount-path=/data'
+      - '--add-volume-mount=volume=uploads,mount-path=/data/uploads'
+      - '--timeout=300'
       - '--memory=${_MEMORY}'
       - '--cpu=${_CPU}'
       - '--min-instances=${_MIN_INSTANCES}'
