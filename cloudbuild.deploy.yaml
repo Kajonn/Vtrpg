@@ -59,9 +59,7 @@ steps:
       - '--platform=managed'
       - '--allow-unauthenticated'
       - '--port=8080'
-      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},\
-MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,\
-UPLOAD_DIR=/data/uploads'
+      - '--set-env-vars=ALLOWED_ORIGINS=${_ALLOWED_ORIGINS},MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE},FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads'
       # Mount Cloud Storage bucket for persistent uploads
       - '--add-volume=name=uploads,type=cloud-storage,bucket=${_STORAGE_BUCKET}'
       - '--add-volume-mount=volume=uploads,mount-path=/data/uploads'
