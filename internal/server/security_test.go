@@ -323,3 +323,32 @@ func TestIsValidPosition(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAllowedImageType(t *testing.T) {
+	tests := []struct {
+		mimeType string
+		want     bool
+	}{
+		{"image/jpeg", true},
+		{"image/jpg", true},
+		{"image/png", true},
+		{"image/gif", true},
+		{"image/webp", true},
+		{"image/svg+xml", true},
+		{"image/bmp", true},
+		{"image/tiff", true},
+		{"application/pdf", false},
+		{"text/html", false},
+		{"application/octet-stream", false},
+		{"video/mp4", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.mimeType, func(t *testing.T) {
+			if got := isAllowedImageType(tt.mimeType); got != tt.want {
+				t.Errorf("isAllowedImageType(%q) = %v, want %v", tt.mimeType, got, tt.want)
+			}
+		})
+	}
+}

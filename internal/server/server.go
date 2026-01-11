@@ -654,6 +654,28 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 			return
 		}
 
+		// Validate MIME type by detecting content
+		mimeType, err := detectContentType(file, fh.Filename)
+		if err != nil {
+			file.Close()
+			http.Error(w, "unable to detect file type", http.StatusBadRequest)
+			return
+		}
+		if !isAllowedImageType(mimeType) {
+			file.Close()
+			http.Error(w, "invalid file type: only images are allowed", http.StatusBadRequest)
+			return
+		}
+
+		// Reset file pointer after reading for type detection
+		if seeker, ok := file.(io.Seeker); ok {
+			if _, err := seeker.Seek(0, 0); err != nil {
+				file.Close()
+				http.Error(w, "unable to process file", http.StatusInternalServerError)
+				return
+			}
+		}
+
 		safeName := filepath.Base(fh.Filename)
 		uniqueName := fmt.Sprintf("%s-%s", s.newID(), safeName)
 		destPath := filepath.Join(s.cfg.UploadDir, uniqueName)
@@ -1314,18 +1336,21 @@ func (s *Server) deleteRoom(roomID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	result, err := tx.Exec(`DELETE FROM rooms WHERE id = ?`, roomID)
 	if err != nil {
-		tx.Rollback()
 		return false, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		tx.Rollback()
 		return false, err
 	}
 	if affected == 0 {
-		tx.Rollback()
 		return false, nil
 	}
 	if err := tx.Commit(); err != nil {
@@ -1909,4 +1934,24 @@ func isValidImageURL(rawURL string) bool {
 // isValidPosition checks if position coordinates are valid finite numbers.
 func isValidPosition(x, y float64) bool {
 	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0)
+}
+
+// isAllowedImageType checks if a MIME type is allowed for image uploads.
+func isAllowedImageType(mimeType string) bool {
+	allowed := []string{
+		"image/jpeg",
+		"image/jpg",
+		"image/png",
+		"image/gif",
+		"image/webp",
+		"image/svg+xml",
+		"image/bmp",
+		"image/tiff",
+	}
+	for _, t := range allowed {
+		if mimeType == t {
+			return true
+		}
+	}
+	return false
 }
