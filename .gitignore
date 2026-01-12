@@ -5,3 +5,6 @@ server.log
 dist/
 *.db
 /server
+coverage.out
+test-results/
+playwright-report/
