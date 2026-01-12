@@ -98,9 +98,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         --platform=managed \
         --allow-unauthenticated \
         --port=8080 \
-        --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads" \
+        --set-env-vars="ALLOWED_ORIGINS=*,MAX_UPLOAD_SIZE=10485760,FRONTEND_DIR=/app/dist,UPLOAD_DIR=/data/uploads,DB_PATH=/data/vtrpg.db" \
         --add-volume=name=uploads,type=cloud-storage,bucket=vttrpg-storage \
-        --add-volume-mount=volume=uploads,mount-path=/data/uploads \
+        --add-volume-mount=volume=uploads,mount-path=/data \
         --memory=512Mi \
         --cpu=1 \
         --min-instances=0 \
