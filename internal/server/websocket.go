@@ -48,9 +48,8 @@ func readFrame(conn net.Conn) (byte, []byte, error) {
 	if opcode == 0x0 {
 		return 0, nil, errors.New("continuation frames not supported")
 	}
-	if opcode == 0x8 || opcode == 0x1 || opcode == 0x2 {
-		// allowed
-	} else {
+	// Only allow close (0x8), text (0x1), binary (0x2), ping (0x9), and pong (0xA)
+	if opcode != 0x8 && opcode != 0x1 && opcode != 0x2 && opcode != 0x9 && opcode != 0xA {
 		return 0, nil, errors.New("unsupported opcode")
 	}
 
@@ -67,6 +66,12 @@ func readFrame(conn net.Conn) (byte, []byte, error) {
 			return 0, nil, err
 		}
 		length = int64(binary.BigEndian.Uint64(extended))
+	}
+
+	// Limit frame size to 1 MB to prevent DoS
+	const maxFrameSize = 1 << 20
+	if length > maxFrameSize {
+		return 0, nil, errors.New("frame too large")
 	}
 
 	var maskKey []byte

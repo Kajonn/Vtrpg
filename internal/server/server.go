@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,7 +116,7 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 
-	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer"))
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 	if token != s.cfg.AdminToken {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -229,6 +231,11 @@ func (s *Server) handleRooms(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSpace(payload.Name)
 		if name == "" {
 			name = "Untitled room"
+		}
+		// Validate room name length
+		if utf8.RuneCountInString(name) > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "room name must be 100 characters or less"})
+			return
 		}
 		createdBy := strings.TrimSpace(payload.CreatedBy)
 		if createdBy == "" {
@@ -588,6 +595,11 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		// Validate URL format and scheme
+		if !isValidImageURL(payload.URL) {
+			http.Error(w, "invalid image URL", http.StatusBadRequest)
+			return
+		}
 		x, y, err := s.nextPosition(roomID)
 		if err != nil {
 			s.logger.Error("next position", slog.String("error", err.Error()))
@@ -625,10 +637,48 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 	}
 
 	uploaded := make([]imageResponse, 0)
+	var uploadedPaths []string
+	defer func() {
+		// Clean up uploaded files if we return an error
+		if len(uploadedPaths) > 0 && len(uploaded) == 0 {
+			for _, path := range uploadedPaths {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+
 	for _, fh := range files {
 		file, err := fh.Open()
 		if err != nil {
 			http.Error(w, "unable to open file", http.StatusBadRequest)
+			return
+		}
+
+		// Check if file supports seeking (required for MIME detection)
+		seeker, canSeek := file.(io.Seeker)
+		if !canSeek {
+			file.Close()
+			http.Error(w, "unable to process file", http.StatusInternalServerError)
+			return
+		}
+
+		// Validate MIME type by detecting content
+		mimeType, err := detectContentType(file, fh.Filename)
+		if err != nil {
+			file.Close()
+			http.Error(w, "unable to detect file type", http.StatusBadRequest)
+			return
+		}
+		if !isAllowedImageType(mimeType) {
+			file.Close()
+			http.Error(w, "invalid file type: only images are allowed", http.StatusBadRequest)
+			return
+		}
+
+		// Reset file pointer after reading for type detection
+		if _, err := seeker.Seek(0, 0); err != nil {
+			file.Close()
+			http.Error(w, "unable to process file", http.StatusInternalServerError)
 			return
 		}
 
@@ -645,11 +695,13 @@ func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomI
 		if _, err := io.Copy(out, file); err != nil {
 			out.Close()
 			file.Close()
+			_ = os.Remove(destPath)
 			http.Error(w, "unable to write file", http.StatusInternalServerError)
 			return
 		}
 		out.Close()
 		file.Close()
+		uploadedPaths = append(uploadedPaths, destPath)
 
 		url := "/uploads/" + uniqueName
 		x, y, err := s.nextPosition(roomID)
@@ -714,6 +766,15 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
+	// Validate position coordinates
+	if payload.X != nil && !isValidCoordinate(*payload.X) {
+		http.Error(w, "invalid x coordinate", http.StatusBadRequest)
+		return
+	}
+	if payload.Y != nil && !isValidCoordinate(*payload.Y) {
+		http.Error(w, "invalid y coordinate", http.StatusBadRequest)
+		return
+	}
 	img, ok, err := s.updateImage(roomID, imageID, payload.X, payload.Y)
 	if err != nil {
 		s.logger.Error("update image", slog.String("error", err.Error()))
@@ -745,8 +806,13 @@ func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roo
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if payload.Count <= 0 || len(payload.Results) == 0 {
-		http.Error(w, "missing fields", http.StatusBadRequest)
+	// Validate dice log parameters
+	if payload.Count <= 0 || payload.Count > 1000 {
+		http.Error(w, "invalid dice count", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Results) == 0 || len(payload.Results) > 1000 {
+		http.Error(w, "invalid dice results", http.StatusBadRequest)
 		return
 	}
 
@@ -1276,18 +1342,21 @@ func (s *Server) deleteRoom(roomID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	result, err := tx.Exec(`DELETE FROM rooms WHERE id = ?`, roomID)
 	if err != nil {
-		tx.Rollback()
 		return false, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		tx.Rollback()
 		return false, err
 	}
 	if affected == 0 {
-		tx.Rollback()
 		return false, nil
 	}
 	if err := tx.Commit(); err != nil {
@@ -1849,4 +1918,50 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// isValidImageURL validates that a URL is safe for use as an external image URL.
+// It checks that the URL uses http or https scheme and can be parsed.
+func isValidImageURL(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	return true
+}
+
+// isValidCoordinate checks if a coordinate value is valid (not NaN or Infinity).
+func isValidCoordinate(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// isValidPosition checks if position coordinates are valid finite numbers.
+func isValidPosition(x, y float64) bool {
+	return isValidCoordinate(x) && isValidCoordinate(y)
+}
+
+// isAllowedImageType checks if a MIME type is allowed for image uploads.
+// Note: SVG support is disabled due to XSS risks from embedded JavaScript.
+func isAllowedImageType(mimeType string) bool {
+	allowed := []string{
+		"image/jpeg",
+		"image/png",
+		"image/gif",
+		"image/webp",
+		"image/bmp",
+		"image/tiff",
+	}
+	for _, t := range allowed {
+		if mimeType == t {
+			return true
+		}
+	}
+	return false
 }
