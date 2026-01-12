@@ -51,7 +51,7 @@ test.describe('drag-drop and zoom', () => {
       }
       
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
@@ -218,7 +218,7 @@ test.describe('drag-drop and zoom', () => {
         const url = request.url();
         
         // Room validation endpoint
-        if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+        if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
           const roomId = url.split('/').pop();
           return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
         }
@@ -312,7 +312,7 @@ test.describe('Canvas zoom interactions', () => {
       const method = request.method();
       const url = request.url();
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
@@ -481,7 +481,7 @@ test.describe('Canvas pan interactions', () => {
       const method = request.method();
       const url = request.url();
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
@@ -583,7 +583,7 @@ test.describe('Canvas image drag interactions', () => {
       const method = request.method();
       const url = request.url();
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
@@ -743,7 +743,7 @@ test.describe('Canvas drop interactions', () => {
       const method = request.method();
       const url = request.url();
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
@@ -895,7 +895,7 @@ test.describe('Canvas paste and reset view', () => {
       const method = request.method();
       const url = request.url();
       // Room validation endpoint (must come before other checks)
-      if (method === 'GET' && /\/rooms\/[^\/]+$/.test(url)) {
+      if (method === 'GET' && /\/rooms\/[^/]+$/.test(url)) {
         const roomId = url.split('/').pop();
         return route.fulfill({ status: 200, body: JSON.stringify({ id: roomId, slug: roomId, name: 'Test Room' }) });
       }
