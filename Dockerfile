@@ -23,14 +23,14 @@ COPY --from=go-builder /app/server /usr/local/bin/server
 COPY --from=frontend /app/dist ./dist
 RUN addgroup -S app && adduser -S app -G app \
     && mkdir -p /data/uploads \
-    && chown -R app:app /data/uploads
+    && chown -R app:app /data
 
 ENV PORT=8080 \
     ALLOWED_ORIGINS=* \
     MAX_UPLOAD_SIZE=10485760 \
     FRONTEND_DIR=/app/dist \
     UPLOAD_DIR=/data/uploads \
-    DB_PATH=/tmp/vtrpg.db
+    DB_PATH=/data/vtrpg.db
 
 EXPOSE 8080
 USER app
