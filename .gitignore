@@ -8,3 +8,4 @@ dist/
 coverage.out
 test-results/
 playwright-report/
+test-results/
