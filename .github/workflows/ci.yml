@@ -20,6 +20,8 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
@@ -62,6 +64,8 @@ jobs:
     name: Frontend Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
@@ -87,6 +91,8 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
@@ -213,6 +219,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend-tests, frontend-lint, e2e-tests]
     if: always()
+    permissions: {}
     
     steps:
       - name: Check all jobs status
