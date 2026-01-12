@@ -133,7 +133,7 @@ jobs:
           PORT=8080 \
           FRONTEND_DIR=dist \
           UPLOAD_DIR=/tmp/uploads \
-          ALLOWED_ORIGINS=* \
+          ALLOWED_ORIGINS=http://localhost:8080 \
           ./server > /tmp/server.log 2>&1 &
           echo $! > /tmp/server.pid
           echo "Server started with PID $(cat /tmp/server.pid)"
@@ -142,15 +142,18 @@ jobs:
       - name: Wait for server to be ready
         run: |
           echo "Waiting for server to be ready..."
-          for i in {1..30}; do
+          TIMEOUT=30
+          INTERVAL=2
+          TOTAL_WAIT=$((TIMEOUT * INTERVAL))
+          for i in $(seq 1 $TIMEOUT); do
             if curl -s http://localhost:8080 > /dev/null; then
               echo "Server is ready!"
               exit 0
             fi
-            echo "Attempt $i: Server not ready yet, waiting..."
-            sleep 2
+            echo "Attempt $i/$TIMEOUT: Server not ready yet, waiting..."
+            sleep $INTERVAL
           done
-          echo "Server failed to start within 60 seconds"
+          echo "Server failed to start within $TOTAL_WAIT seconds"
           echo "=== Server logs ==="
           cat /tmp/server.log
           exit 1
