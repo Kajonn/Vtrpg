@@ -5,4 +5,4 @@ server.log
 dist/
 *.db
 /server
-.gitignore
+test-results/
