@@ -25,10 +25,12 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// Content-Security-Policy for API responses
-		if !strings.HasPrefix(r.URL.Path, "/uploads/") && r.URL.Path != "/" && !strings.HasPrefix(r.URL.Path, "/assets/") {
-			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		}
+	// Apply Content-Security-Policy only to API endpoints, not to SPA routes
+	// API routes: /rooms, /ws, /admin, /healthz, /upload
+	// SPA handler serves index.html for client-side routes, which needs to load JS/CSS
+	if isAPIEndpoint(r.URL.Path) {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	}
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -58,4 +60,15 @@ func (s *Server) matchOrigin(origin string) string {
 	}
 
 	return ""
+}
+
+// isAPIEndpoint checks if a path is an API endpoint that should have strict CSP.
+// Returns false for paths that serve the SPA (client-side routes need to load JS/CSS).
+func isAPIEndpoint(path string) bool {
+	// API endpoints that return JSON or handle WebSocket connections
+	return strings.HasPrefix(path, "/rooms") ||
+		strings.HasPrefix(path, "/ws") ||
+		strings.HasPrefix(path, "/admin") ||
+		path == "/healthz" ||
+		path == "/upload"
 }
