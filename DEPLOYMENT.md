@@ -170,6 +170,7 @@ Configure these for your deployment:
 | `MAX_UPLOAD_SIZE` | Max upload size in bytes | `10485760` (10MB) | Adjust based on needs |
 | `FRONTEND_DIR` | Frontend assets directory | `/app/dist` | `/app/dist` (from Docker) |
 | `UPLOAD_DIR` | Upload storage directory | `/data/uploads` | See note on persistence below |
+| `ADMIN_TOKEN` | Bearer token for admin endpoints | `admin` | **CHANGE THIS** to a secure value in production |
 
 ### Update Environment Variables
 
@@ -178,6 +179,22 @@ Configure these for your deployment:
 gcloud run services update vtrpg \
   --region=us-central1 \
   --update-env-vars="ALLOWED_ORIGINS=https://yourdomain.com"
+```
+
+### Setting Admin Token for Production
+
+**Important**: The default admin token is `admin`. You **must** change this for production deployments.
+
+```bash
+# Set a secure admin token
+gcloud run services update vtrpg \
+  --region=us-central1 \
+  --update-env-vars="ADMIN_TOKEN=your-secure-random-token-here"
+```
+
+Generate a secure token using:
+```bash
+openssl rand -base64 32
 ```
 
 ### Important Notes on Cloud Run

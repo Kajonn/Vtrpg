@@ -11,6 +11,21 @@ Environment variables:
 - `ALLOWED_ORIGINS` (comma-separated, default `*`): Origins accepted for HTTP and WebSocket requests.
 - `FRONTEND_DIR` (default `dist`): Directory containing built frontend assets.
 - `UPLOAD_DIR` (default `uploads`): Directory where uploaded files are stored.
+- `ADMIN_TOKEN` (default `admin`): Bearer token required for admin endpoints like `/admin/rooms`.
+
+## Admin Access
+
+Admin endpoints (e.g., `/admin/rooms`) require a Bearer token in the `Authorization` header. The default token is `admin`.
+
+**For production, set a secure token**:
+```bash
+export ADMIN_TOKEN="your-secure-token-here"
+```
+
+Access admin endpoints by providing the token:
+```bash
+curl -H "Authorization: Bearer admin" http://localhost:8080/admin/rooms
+```
 
 ## Development
 

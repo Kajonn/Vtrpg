@@ -173,8 +173,7 @@ export const prepareDieMesh = (entry) => {
   const mesh = entry.template.clone(true);
   mesh.traverse((node) => {
     if (node.isMesh) {
-      node.geometry = entry.geometry;
-      node.material = node.material;
+      // Keep each mesh's own geometry and material (don't overwrite)
       node.castShadow = true;
       node.receiveShadow = true;
     }
@@ -250,15 +249,26 @@ export const useDiceModels = () => {
             
             const obj = await objLoader.loadAsync(objPath);
             
-            let firstMesh = null;
+            // Collect all geometries for physics collider (use the largest mesh)
+            let largestMesh = null;
+            let largestVolume = 0;
             obj.traverse((child) => {
-              if (!firstMesh && child.isMesh) {
-                firstMesh = child;
+              if (child.isMesh) {
+                child.geometry.computeBoundingBox();
+                const bbox = child.geometry.boundingBox;
+                const volume = (bbox.max.x - bbox.min.x) * (bbox.max.y - bbox.min.y) * (bbox.max.z - bbox.min.z);
+                if (volume > largestVolume) {
+                  largestVolume = volume;
+                  largestMesh = child;
+                }
               }
             });
 
-            const template = (firstMesh || obj).clone(true);
-            let geometry = firstMesh?.geometry || (template.isMesh ? template.geometry : null);
+            // Use the full object as template (contains all meshes/materials)
+            const template = obj.clone(true);
+            
+            // Get geometry from largest mesh for physics
+            let geometry = largestMesh?.geometry;
             if (!geometry) {
               throw new Error(`No geometry found for d${sides}`);
             }
@@ -278,10 +288,11 @@ export const useDiceModels = () => {
 
             const vertices = extractVertices(geometry);
 
+            // Scale all meshes in the template and configure rendering
             template.traverse((node) => {
               if (node.isMesh) {
-                node.geometry = geometry;
-                node.material = node.material;
+                node.geometry = node.geometry.clone();
+                node.geometry.scale(scale, scale, scale);
                 node.castShadow = true;
                 node.receiveShadow = true;
               }

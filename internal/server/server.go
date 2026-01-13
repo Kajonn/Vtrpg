@@ -104,11 +104,6 @@ func (s *Server) routes() {
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if s.cfg.AdminToken == "" {
-		http.Error(w, "admin access is not configured", http.StatusForbidden)
-		return false
-	}
-
 	header := r.Header.Get("Authorization")
 	if header == "" || !strings.HasPrefix(header, "Bearer ") {
 		w.Header().Set("WWW-Authenticate", "Bearer")
