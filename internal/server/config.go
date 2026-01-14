@@ -38,7 +38,7 @@ func LoadConfig() Config {
 		FrontendDir:       getEnv("FRONTEND_DIR", defaultFrontendDir),
 		UploadDir:         getEnv("UPLOAD_DIR", defaultUploadDir),
 		DBPath:            getEnv("DB_PATH", defaultDBPath),
-		AdminToken:        os.Getenv("ADMIN_TOKEN"),
+		AdminToken:        getEnv("ADMIN_TOKEN", "admin"),
 	}
 
 	if rawMax := os.Getenv("MAX_UPLOAD_SIZE"); rawMax != "" {

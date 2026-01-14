@@ -25,10 +25,11 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	// Apply Content-Security-Policy only to API endpoints, not to SPA routes
-	// API routes: /rooms, /ws, /admin, /healthz, /upload
-	// SPA handler serves index.html for client-side routes, which needs to load JS/CSS
-	if isAPIEndpoint(r.URL.Path) {
+	
+	// Apply Content-Security-Policy only to API endpoints (not SPA)
+	// SPA routes serve HTML that loads its own JS/CSS via <script> and <link> tags
+	// API routes return JSON and should have strict CSP
+	if isAPIEndpoint(r.URL.Path) && !shouldServeSPA(r) {
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	}
 
@@ -62,8 +63,8 @@ func (s *Server) matchOrigin(origin string) string {
 	return ""
 }
 
-// isAPIEndpoint checks if a path is an API endpoint that should have strict CSP.
-// Returns false for paths that serve the SPA (client-side routes need to load JS/CSS).
+// isAPIEndpoint checks if a path is potentially an API endpoint.
+// This doesn't account for browser navigation vs API calls - use shouldServeSPA for that.
 func isAPIEndpoint(path string) bool {
 	// API endpoints that return JSON or handle WebSocket connections
 	return strings.HasPrefix(path, "/rooms") ||
@@ -71,4 +72,17 @@ func isAPIEndpoint(path string) bool {
 		strings.HasPrefix(path, "/admin") ||
 		path == "/healthz" ||
 		path == "/upload"
+}
+
+// shouldServeSPA checks if the request should serve the SPA (HTML) rather than JSON/API response.
+// SPA routes need permissive CSP to load scripts and styles.
+func shouldServeSPA(r *http.Request) bool {
+	// Only GET/HEAD requests can serve SPA
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	
+	// Check Accept header to distinguish browser navigation from API calls
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/html")
 }
