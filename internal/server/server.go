@@ -461,17 +461,15 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle GET /rooms/{roomId} - browser navigation or API endpoint
+	// Handle GET/PATCH /rooms/{roomId} - browser navigation or API endpoint
 	if len(parts) == 1 {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		// If it's a browser navigation (text/html comes before application/json in Accept), serve the SPA
-		// so React Router can handle the routing
-		accept := r.Header.Get("Accept")
-		htmlIdx := strings.Index(accept, "text/html")
-		jsonIdx := strings.Index(accept, "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			// If it's a browser navigation (text/html comes before application/json in Accept), serve the SPA
+			// so React Router can handle the routing
+			accept := r.Header.Get("Accept")
+			htmlIdx := strings.Index(accept, "text/html")
+			jsonIdx := strings.Index(accept, "application/json")
 		// Serve SPA if text/html is present and comes before json (or json is not present)
 		if htmlIdx >= 0 && (jsonIdx < 0 || htmlIdx < jsonIdx) {
 			s.spaHandler().ServeHTTP(w, r)
@@ -490,6 +488,13 @@ func (s *Server) handleRoom(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, room)
 		return
+		case http.MethodPatch:
+			s.handleRoomUpdate(w, r, roomID)
+			return
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 	}
 
 	if len(parts) < 2 {
@@ -581,6 +586,44 @@ func (s *Server) handleRoomGM(w http.ResponseWriter, r *http.Request, roomID str
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"active": s.isGMActive(roomID)})
+}
+
+func (s *Server) handleRoomUpdate(w http.ResponseWriter, r *http.Request, roomID string) {
+	var payload struct {
+		Theme string `json:"theme"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	theme := Theme(strings.TrimSpace(payload.Theme))
+	if theme == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "theme is required"})
+		return
+	}
+	if !IsValidTheme(theme) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid theme", "validThemes": strings.Join(themeNames(), ", ")})
+		return
+	}
+
+	room, err := s.updateRoomTheme(roomID, theme)
+	if err != nil {
+		s.logger.Error("update room theme", slog.String("error", err.Error()), slog.String("roomId", roomID))
+		http.Error(w, "failed to update room", http.StatusInternalServerError)
+		return
+	}
+
+	s.broadcastThemeChange(roomID, theme)
+	writeJSON(w, http.StatusOK, room)
+}
+
+func themeNames() []string {
+	names := make([]string, len(ValidThemes))
+	for i, t := range ValidThemes {
+		names[i] = string(t)
+	}
+	return names
 }
 
 func (s *Server) handleImageCreate(w http.ResponseWriter, r *http.Request, roomID string) {
@@ -1059,12 +1102,13 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 			ID:        s.newID(),
 			Slug:      slug,
 			Name:      name,
+			Theme:     ThemeDefault,
 			CreatedBy: createdBy,
 			CreatedAt: time.Now().UTC(),
 		}
 		result, err := s.db.Exec(
-			`INSERT OR IGNORE INTO rooms (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)`,
-			room.ID, room.Slug, room.Name, room.CreatedBy, room.CreatedAt,
+			`INSERT OR IGNORE INTO rooms (id, slug, name, theme, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			room.ID, room.Slug, room.Name, room.Theme, room.CreatedBy, room.CreatedAt,
 		)
 		if err != nil {
 			return Room{}, err
@@ -1081,7 +1125,7 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 }
 
 func (s *Server) listRooms() ([]Room, error) {
-	rows, err := s.db.Query(`SELECT id, slug, name, created_by, created_at FROM rooms ORDER BY created_at DESC, id DESC`)
+	rows, err := s.db.Query(`SELECT id, slug, name, theme, created_by, created_at FROM rooms ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -1090,7 +1134,7 @@ func (s *Server) listRooms() ([]Room, error) {
 	rooms := make([]Room, 0)
 	for rows.Next() {
 		var room Room
-		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt); err != nil {
+		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt); err != nil {
 			return nil, err
 		}
 		room.CreatedAt = room.CreatedAt.UTC()
@@ -1311,8 +1355,8 @@ func (s *Server) listAdminRooms() ([]AdminRoomSummary, error) {
 
 func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 	var room Room
-	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE slug = ?`, slug).
-		Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_at FROM rooms WHERE slug = ?`, slug).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Room{}, false, nil
 	}
@@ -1325,13 +1369,21 @@ func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 
 func (s *Server) getRoomByID(roomID string) (Room, error) {
 	var room Room
-	err := s.db.QueryRow(`SELECT id, slug, name, created_by, created_at FROM rooms WHERE id = ?`, roomID).
-		Scan(&room.ID, &room.Slug, &room.Name, &room.CreatedBy, &room.CreatedAt)
+	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_at FROM rooms WHERE id = ?`, roomID).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt)
 	if err != nil {
 		return Room{}, err
 	}
 	room.CreatedAt = room.CreatedAt.UTC()
 	return room, nil
+}
+
+func (s *Server) updateRoomTheme(roomID string, theme Theme) (Room, error) {
+	_, err := s.db.Exec(`UPDATE rooms SET theme = ? WHERE id = ?`, theme, roomID)
+	if err != nil {
+		return Room{}, err
+	}
+	return s.getRoomByID(roomID)
 }
 
 func (s *Server) resolveRoomID(identifier string) (string, bool, error) {
@@ -1838,6 +1890,19 @@ func (s *Server) broadcastImageDeleted(roomID, imageID string) {
 		s.logger.Error("marshal delete", slog.String("error", err.Error()))
 		return
 	}
+	s.broadcast(roomID, payload)
+}
+
+func (s *Server) broadcastThemeChange(roomID string, theme Theme) {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "ThemeChange",
+		"payload": map[string]string{"theme": string(theme)},
+	})
+	if err != nil {
+		s.logger.Error("marshal theme change", slog.String("error", err.Error()))
+		return
+	}
+	s.logger.Info("broadcast theme change", slog.String("room", roomID), slog.String("theme", string(theme)))
 	s.broadcast(roomID, payload)
 }
 

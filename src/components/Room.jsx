@@ -3,6 +3,44 @@ import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
 import Canvas from './Canvas.jsx';
 
+// Theme definitions with preview colors
+const THEMES = [
+  { id: 'default', name: 'Default', colors: ['#0f172a', '#22d3ee', '#0ea5e9'] },
+  { id: 'dracula', name: 'Dracula', colors: ['#282a36', '#bd93f9', '#ff79c6'] },
+  { id: 'nord', name: 'Nord', colors: ['#2e3440', '#88c0d0', '#81a1c1'] },
+  { id: 'gruvbox', name: 'Gruvbox', colors: ['#282828', '#fe8019', '#fabd2f'] },
+  { id: 'solarized', name: 'Solarized', colors: ['#002b36', '#2aa198', '#268bd2'] },
+  { id: 'monokai', name: 'Monokai', colors: ['#272822', '#a6e22e', '#66d9ef'] },
+  { id: 'forest', name: 'Forest', colors: ['#1a2f1a', '#4ade80', '#22c55e'] },
+  { id: 'sunset', name: 'Sunset', colors: ['#1f1315', '#f97316', '#ef4444'] },
+  { id: 'ocean', name: 'Ocean', colors: ['#0a1628', '#0077b6', '#00b4d8'] },
+  { id: 'cyberpunk', name: 'Cyberpunk', colors: ['#0d0221', '#ff00ff', '#00ffff'] },
+  { id: 'vampire', name: 'Vampire', colors: ['#1a0a0a', '#8b0000', '#dc143c'] },
+  { id: 'midnight', name: 'Midnight', colors: ['#0f0f23', '#4c1d95', '#7c3aed'] },
+  { id: 'aurora', name: 'Aurora', colors: ['#0f172a', '#22c55e', '#a855f7'] },
+  { id: 'desert', name: 'Desert', colors: ['#1c1510', '#d97706', '#fbbf24'] },
+  { id: 'arctic', name: 'Arctic', colors: ['#1e293b', '#7dd3fc', '#e0f2fe'] },
+  { id: 'lavender', name: 'Lavender', colors: ['#1e1b2e', '#a78bfa', '#c4b5fd'] },
+  { id: 'rose', name: 'Rose', colors: ['#1f1218', '#f472b6', '#fda4af'] },
+  { id: 'emerald', name: 'Emerald', colors: ['#0a1f0a', '#10b981', '#fbbf24'] },
+  { id: 'slate', name: 'Slate', colors: ['#1e293b', '#64748b', '#94a3b8'] },
+  { id: 'coffee', name: 'Coffee', colors: ['#1a1410', '#92400e', '#d4a574'] },
+  { id: 'neon', name: 'Neon', colors: ['#0a0a0a', '#39ff14', '#00ff00'] },
+  { id: 'plum', name: 'Plum', colors: ['#1a0f1f', '#9333ea', '#e879f9'] },
+  { id: 'storm', name: 'Storm', colors: ['#1a1c2e', '#6366f1', '#a5b4fc'] },
+  { id: 'cherry', name: 'Cherry', colors: ['#1f0a14', '#ff6b9d', '#ffc0cb'] },
+  { id: 'galaxy', name: 'Galaxy', colors: ['#0a0015', '#8b5cf6', '#c084fc'] },
+  { id: 'mint', name: 'Mint', colors: ['#0a1f1a', '#34d399', '#6ee7b7'] },
+  { id: 'rust', name: 'Rust', colors: ['#1a0f08', '#ea580c', '#fb923c'] },
+  { id: 'sapphire', name: 'Sapphire', colors: ['#0a1428', '#2563eb', '#60a5fa'] },
+  { id: 'coral', name: 'Coral', colors: ['#1f1410', '#f97316', '#fb7185'] },
+  { id: 'onyx', name: 'Onyx', colors: ['#0a0a0a', '#525252', '#a3a3a3'] },
+  { id: 'amber', name: 'Amber', colors: ['#1a1408', '#f59e0b', '#fbbf24'] },
+  { id: 'twilight', name: 'Twilight', colors: ['#1a0f20', '#8b5cf6', '#f97316'] },
+  { id: 'pine', name: 'Pine', colors: ['#0a1a12', '#166534', '#22c55e'] },
+  { id: 'maroon', name: 'Maroon', colors: ['#1a0808', '#881337', '#be123c'] },
+];
+
 const fetchImages = async (roomId) => {
   const response = await fetch(`/rooms/${roomId}/images`, {
     headers: {
@@ -26,6 +64,8 @@ const Room = ({
   onSendDiceRoll,
   diceLog,
   onDiceResult,
+  theme,
+  onThemeChange,
 }) => {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState([]);
@@ -410,6 +450,34 @@ const Room = ({
                     </div>
                   </div>
                 </div>
+
+                <div className="gm-tools__section">
+                  <h4>Room Theme</h4>
+                  <div className="theme-selector">
+                    <div className="theme-selector__dropdown">
+                      {THEMES.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={`theme-selector__item ${theme === t.id ? 'theme-selector__item--active' : ''}`}
+                          onClick={() => onThemeChange?.(t.id)}
+                        >
+                          <div className="theme-selector__preview">
+                            {t.colors.map((color, i) => (
+                              <div
+                                key={i}
+                                className="theme-selector__preview-swatch"
+                                style={{ backgroundColor: color }}
+                              />
+                            ))}
+                          </div>
+                          <span className="theme-selector__name">{t.name}</span>
+                          {theme === t.id && <span className="theme-selector__check">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
                 
                 <button type="button" className="ghost-button" onClick={onLogout}>
                   Logga ut
@@ -494,6 +562,8 @@ Room.propTypes = {
     })
   ),
   onDiceResult: PropTypes.func,
+  theme: PropTypes.string,
+  onThemeChange: PropTypes.func,
 };
 
 export default Room;

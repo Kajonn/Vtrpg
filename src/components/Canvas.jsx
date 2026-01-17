@@ -354,6 +354,7 @@ const Canvas = ({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (!window.confirm('Are you sure you want to delete this image?')) return;
                     removedIdsRef.current.add(image.id);
                     setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
                     onRemoveImage?.(image.id);
