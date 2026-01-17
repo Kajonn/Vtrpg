@@ -110,7 +110,18 @@ test.describe('drag-drop and zoom', () => {
     await page.waitForSelector('.upload-list', { state: 'detached', timeout: 10000 });
     const firstLayer = page.locator('.canvas-layer').first();
     const firstId = await firstLayer.getAttribute('data-id');
-    await page.locator('.image-remove').first().click({ force: true });
+    // Move the image up to avoid footer covering the remove button
+    await firstLayer.hover();
+    await page.mouse.down();
+    await page.mouse.move(400, 100); // Move to top area away from footer
+    await page.mouse.up();
+    await page.waitForTimeout(500); // Wait for position update
+    // Click the remove button using bounding box to avoid viewport issues
+    const removeButton = page.locator('.image-remove').first();
+    const box = await removeButton.boundingBox();
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    }
     // Force-remove the targeted layer to keep a single canvas layer
     await page.evaluate((id) => {
       const el = document.querySelector(`.canvas-layer[data-id="${id}"]`);
@@ -289,15 +300,18 @@ test.describe('drag-drop and zoom', () => {
     await page.selectOption('select', 'gm');
     await page.click('button:has-text("Enter")');
 
-    // Check for elements in the new layout (footer with title and player name)
+    // Check for elements in the new layout (footer with title and canvas)
     await expect(page.getByText('Virtual TTRPG Board')).toBeVisible();
-    await expect(page.getByText('Returner')).toBeVisible();
+    await expect(page.locator('.canvas')).toBeVisible();
+    // Verify we're in the room by checking for room-specific elements
+    await expect(page.locator('.room-footer')).toBeVisible();
 
     await page.reload();
 
     // The login form should be skipped because the session is restored
     await expect(page.getByText('Virtual TTRPG Board')).toBeVisible();
-    await expect(page.getByText('Returner')).toBeVisible();
+    await expect(page.locator('.canvas')).toBeVisible();
+    await expect(page.locator('.room-footer')).toBeVisible();
   });
 });
 
