@@ -1083,3 +1083,97 @@ func TestEmptyCollectionsReturnArrays(t *testing.T) {
 		}
 	})
 }
+
+func TestImageHiddenToggle(t *testing.T) {
+	srv := newTestServer(t, t.TempDir())
+	router := srv.Router()
+	
+	// Create a room
+	room := createRoomForTest(t, router)
+	
+	// Add an image via URL
+	body, _ := json.Marshal(map[string]string{"url": "https://example.com/test.png"})
+	req := httptest.NewRequest(http.MethodPost, "/rooms/"+room.ID+"/images", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for image creation, got %d: %s", w.Code, w.Body.String())
+	}
+	
+	var img imageResponse
+	if err := json.NewDecoder(w.Body).Decode(&img); err != nil {
+		t.Fatalf("failed to decode image response: %v", err)
+	}
+	
+	// Image should not be hidden by default
+	if img.Hidden {
+		t.Fatalf("expected image to not be hidden by default, got hidden=true")
+	}
+	
+	// Hide the image
+	hideBody, _ := json.Marshal(map[string]bool{"hidden": true})
+	req = httptest.NewRequest(http.MethodPatch, "/rooms/"+room.ID+"/images/"+img.ID, bytes.NewReader(hideBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for hiding image, got %d: %s", w.Code, w.Body.String())
+	}
+	
+	var hiddenImg imageResponse
+	if err := json.NewDecoder(w.Body).Decode(&hiddenImg); err != nil {
+		t.Fatalf("failed to decode hidden image response: %v", err)
+	}
+	
+	// Image should now be hidden
+	if !hiddenImg.Hidden {
+		t.Fatalf("expected image to be hidden, got hidden=false")
+	}
+	
+	// Fetch images and verify hidden state persisted
+	req = httptest.NewRequest(http.MethodGet, "/rooms/"+room.ID+"/images", nil)
+	req.Header.Set("Accept", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for fetching images, got %d: %s", w.Code, w.Body.String())
+	}
+	
+	var images []imageResponse
+	if err := json.NewDecoder(w.Body).Decode(&images); err != nil {
+		t.Fatalf("failed to decode images: %v", err)
+	}
+	
+	if len(images) != 1 {
+		t.Fatalf("expected 1 image, got %d", len(images))
+	}
+	
+	if !images[0].Hidden {
+		t.Fatalf("expected fetched image to be hidden, got hidden=false")
+	}
+	
+	// Show the image again
+	showBody, _ := json.Marshal(map[string]bool{"hidden": false})
+	req = httptest.NewRequest(http.MethodPatch, "/rooms/"+room.ID+"/images/"+img.ID, bytes.NewReader(showBody))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for showing image, got %d: %s", w.Code, w.Body.String())
+	}
+	
+	var shownImg imageResponse
+	if err := json.NewDecoder(w.Body).Decode(&shownImg); err != nil {
+		t.Fatalf("failed to decode shown image response: %v", err)
+	}
+	
+	// Image should now be visible
+	if shownImg.Hidden {
+		t.Fatalf("expected image to be visible, got hidden=true")
+	}
+}
