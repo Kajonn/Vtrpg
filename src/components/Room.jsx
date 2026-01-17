@@ -151,6 +151,24 @@ const Room = ({
     }
   };
 
+  const handleToggleHidden = async (imageId, hidden) => {
+    if (!isGM) return;
+    // Optimistically update locally
+    onImagesUpdate((prev) => prev.map((img) => (img.id === imageId ? { ...img, hidden } : img)));
+    try {
+      const response = await fetch(`/rooms/${roomId}/images/${imageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message || 'Failed to toggle image visibility');
+      onImagesUpdate((prev) => prev.map((img) => (img.id === imageId ? payload : img)));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const handleCopyInvite = async () => {
     setCopyStatus('');
     try {
@@ -183,6 +201,7 @@ const Room = ({
           onShareUrl={handleShareUrl}
           onMoveImage={handleMoveImage}
           onRemoveImage={handleRemoveImage}
+          onToggleHidden={handleToggleHidden}
           diceRoll={diceRoll}
           onSendDiceRoll={onSendDiceRoll}
           onDiceResult={onDiceResult}
@@ -279,6 +298,7 @@ Room.propTypes = {
     status: PropTypes.string,
     x: PropTypes.number,
     y: PropTypes.number,
+    hidden: PropTypes.bool,
   })).isRequired,
   roomSlug: PropTypes.string,
   onImagesUpdate: PropTypes.func.isRequired,

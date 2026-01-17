@@ -12,6 +12,7 @@ const Canvas = ({
   onShareUrl,
   onMoveImage,
   onRemoveImage,
+  onToggleHidden,
   roomId,
   diceRoll,
   onSendDiceRoll,
@@ -32,7 +33,11 @@ const Canvas = ({
   const [diceDebugMode, setDiceDebugMode] = useState(false);
 
   useEffect(() => {
-    const nextImages = images.filter((img) => !removedIdsRef.current.has(img.id));
+    // Filter hidden images for players
+    const filteredImages = isGM 
+      ? images 
+      : images.filter((img) => !img.hidden);
+    const nextImages = filteredImages.filter((img) => !removedIdsRef.current.has(img.id));
     setRenderImages(nextImages);
     
     // Clean up removedIdsRef: remove IDs that are no longer in the source images
@@ -56,7 +61,7 @@ const Canvas = ({
       });
       return next;
     });
-  }, [images, dragging.id]);
+  }, [images, dragging.id, isGM]);
 
   const toCanvasCoords = useCallback((clientX, clientY) => {
     const bounds = containerRef.current?.getBoundingClientRect();
@@ -187,33 +192,49 @@ const Canvas = ({
       renderImages.map((image) => {
         const position = getImagePosition(image);
         const isDragging = dragging.id === image.id;
+        const isHidden = image.hidden === true;
         return (
           <div
-            className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''}`}
+            className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''} ${isHidden ? 'canvas-layer--hidden' : ''}`}
             key={image.id || image.url}
             data-id={image.id}
             style={{ 
               transform: `translate(${position.x}px, ${position.y}px)`,
               cursor: isGM ? (isDragging ? 'grabbing' : 'grab') : 'default',
-              userSelect: 'none'
+              userSelect: 'none',
+              opacity: isHidden && isGM ? 0.4 : 1,
             }}
             onPointerDown={(event) => beginDrag(image, event)}
             onDragStart={(event) => event.preventDefault()}
           >
             {isGM && (
-              <button
-                type="button"
-                className="image-remove"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  removedIdsRef.current.add(image.id);
-                  setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
-                  onRemoveImage?.(image.id);
-                }}
-              >
-                X
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="image-hide"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleHidden?.(image.id, !isHidden);
+                  }}
+                  title={isHidden ? 'Show image to players' : 'Hide image from players'}
+                >
+                  {isHidden ? '👁' : '🙈'}
+                </button>
+                <button
+                  type="button"
+                  className="image-remove"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    removedIdsRef.current.add(image.id);
+                    setRenderImages((prev) => prev.filter((img) => img.id !== image.id));
+                    onRemoveImage?.(image.id);
+                  }}
+                >
+                  X
+                </button>
+              </>
             )}
             <img
               src={image.url}
@@ -226,7 +247,7 @@ const Canvas = ({
           </div>
         );
       }),
-    [renderImages, isGM, onRemoveImage, getImagePosition, beginDrag, dragging]
+    [renderImages, isGM, onRemoveImage, onToggleHidden, getImagePosition, beginDrag, dragging]
   );
 
   return (
@@ -320,12 +341,14 @@ Canvas.propTypes = {
     status: PropTypes.string,
     x: PropTypes.number,
     y: PropTypes.number,
+    hidden: PropTypes.bool,
   })).isRequired,
   isGM: PropTypes.bool.isRequired,
   onUploadFiles: PropTypes.func,
   onShareUrl: PropTypes.func,
   onMoveImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
+  onToggleHidden: PropTypes.func,
   roomId: PropTypes.string,
   diceRoll: PropTypes.shape({
     seed: PropTypes.number,
