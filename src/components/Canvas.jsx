@@ -11,6 +11,7 @@ const Canvas = ({
   onUploadFiles,
   onShareUrl,
   onMoveImage,
+  onResizeImage,
   onRemoveImage,
   onToggleHidden,
   roomId,
@@ -24,11 +25,18 @@ const Canvas = ({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState({ id: null, pointerId: null });
   const [panning, setPanning] = useState({ active: false, pointerId: null });
+  const [resizing, setResizing] = useState({ id: null, pointerId: null });
   const [localPositions, setLocalPositions] = useState({});
   const [renderImages, setRenderImages] = useState(images);
+  const [imageDimensions, setImageDimensions] = useState({});
+  const [imageAspectRatios, setImageAspectRatios] = useState({});
   const removedIdsRef = useRef(new Set());
+
+  const BASE_SIZE = 320; // Base size for calculating frame dimensions
+  const MIN_SIZE = 50; // Minimum frame dimension
   const dragOffset = useRef({ x: 0, y: 0 });
   const livePosition = useRef({ x: 0, y: 0 });
+  const resizeStart = useRef({ width: 0, height: 0, clientX: 0, clientY: 0 });
   const panOrigin = useRef({ x: 0, y: 0, startX: 0, startY: 0 });
   const [diceDebugMode, setDiceDebugMode] = useState(false);
 
@@ -61,7 +69,19 @@ const Canvas = ({
       });
       return next;
     });
-  }, [images, dragging.id, isGM]);
+
+    // Sync image dimensions from server (for multiplayer)
+    setImageDimensions((prev) => {
+      const next = { ...prev };
+      nextImages.forEach((img) => {
+        // Only update from server if not actively resizing this image
+        if (resizing.id !== img.id && img.width > 0 && img.height > 0) {
+          next[img.id] = { width: img.width, height: img.height };
+        }
+      });
+      return next;
+    });
+  }, [images, dragging.id, resizing.id, isGM]);
 
   const toCanvasCoords = useCallback((clientX, clientY) => {
     const bounds = containerRef.current?.getBoundingClientRect();
@@ -78,6 +98,58 @@ const Canvas = ({
   const getImagePosition = useCallback((image) => {
     return localPositions[image.id] || { x: image.x || 0, y: image.y || 0 };
   }, [localPositions]);
+
+  const handleImageLoad = useCallback((imageId, event, serverWidth, serverHeight) => {
+    const img = event.target;
+    const naturalWidth = img.naturalWidth;
+    const naturalHeight = img.naturalHeight;
+    if (naturalWidth && naturalHeight) {
+      const aspectRatio = naturalWidth / naturalHeight;
+      
+      // Always store the aspect ratio
+      setImageAspectRatios(prev => ({
+        ...prev,
+        [imageId]: aspectRatio
+      }));
+      
+      // Use server dimensions if available, otherwise calculate from natural size
+      if (serverWidth > 0 && serverHeight > 0) {
+        setImageDimensions(prev => ({
+          ...prev,
+          [imageId]: { width: serverWidth, height: serverHeight }
+        }));
+      } else if (!imageDimensions[imageId]) {
+        // Only set default dimensions if we don't already have them
+        let frameWidth, frameHeight;
+        if (aspectRatio >= 1) {
+          // Landscape or square: height (smallest) is base size
+          frameHeight = BASE_SIZE;
+          frameWidth = BASE_SIZE * aspectRatio;
+        } else {
+          // Portrait: width (smallest) is base size
+          frameWidth = BASE_SIZE;
+          frameHeight = BASE_SIZE / aspectRatio;
+        }
+        setImageDimensions(prev => ({
+          ...prev,
+          [imageId]: { width: frameWidth, height: frameHeight }
+        }));
+      }
+    }
+  }, [imageDimensions]);
+
+  const getFrameDimensions = useCallback((imageId, serverWidth, serverHeight) => {
+    // First check if we have local dimensions (from resize or image load)
+    if (imageDimensions[imageId]) {
+      return imageDimensions[imageId];
+    }
+    // Fall back to server dimensions if available
+    if (serverWidth > 0 && serverHeight > 0) {
+      return { width: serverWidth, height: serverHeight };
+    }
+    // Default size
+    return { width: BASE_SIZE, height: BASE_SIZE };
+  }, [imageDimensions]);
 
   const handleWheel = useCallback((event) => {
     event.preventDefault();
@@ -159,6 +231,21 @@ const Canvas = ({
     setDragging({ id: image.id, pointerId: event.pointerId });
   }, [isGM, toCanvasCoords, getImagePosition]);
 
+  const beginResize = useCallback((image, event) => {
+    if (!isGM) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const currentDimensions = getFrameDimensions(image.id, image.width, image.height);
+    resizeStart.current = {
+      width: currentDimensions.width,
+      height: currentDimensions.height,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    containerRef.current?.setPointerCapture(event.pointerId);
+    setResizing({ id: image.id, pointerId: event.pointerId });
+  }, [isGM, getFrameDimensions]);
+
   const handlePointerMove = useCallback((event) => {
     if (panning.active && panning.pointerId === event.pointerId) {
       const dx = event.clientX - panOrigin.current.x;
@@ -166,17 +253,53 @@ const Canvas = ({
       setPan({ x: panOrigin.current.startX + dx, y: panOrigin.current.startY + dy });
       return;
     }
+    if (resizing.id && resizing.pointerId === event.pointerId) {
+      const dx = (event.clientX - resizeStart.current.clientX) / scale;
+      const dy = (event.clientY - resizeStart.current.clientY) / scale;
+      const aspectRatio = imageAspectRatios[resizing.id] || 1;
+      
+      // Use the larger delta to determine new size, maintaining aspect ratio
+      const deltaSize = Math.max(dx, dy);
+      let newWidth, newHeight;
+      
+      if (aspectRatio >= 1) {
+        // Landscape: width drives the size
+        newWidth = Math.max(MIN_SIZE * aspectRatio, resizeStart.current.width + deltaSize);
+        newHeight = newWidth / aspectRatio;
+      } else {
+        // Portrait: height drives the size
+        newHeight = Math.max(MIN_SIZE / aspectRatio, resizeStart.current.height + deltaSize);
+        newWidth = newHeight * aspectRatio;
+      }
+      
+      setImageDimensions(prev => ({
+        ...prev,
+        [resizing.id]: { width: newWidth, height: newHeight }
+      }));
+      return;
+    }
     if (!dragging.id || dragging.pointerId !== event.pointerId) return;
     const pointer = toCanvasCoords(event.clientX, event.clientY);
     const nextPosition = { x: pointer.x - dragOffset.current.x, y: pointer.y - dragOffset.current.y };
     livePosition.current = nextPosition;
     setLocalPositions((prev) => ({ ...prev, [dragging.id]: nextPosition }));
-  }, [panning, dragging, toCanvasCoords]);
+  }, [panning, dragging, resizing, toCanvasCoords, scale, imageAspectRatios]);
 
   const endDrag = async (event) => {
     if (panning.active && panning.pointerId === event.pointerId) {
       containerRef.current?.releasePointerCapture(event.pointerId);
       setPanning({ active: false, pointerId: null });
+    }
+
+    if (resizing.id && resizing.pointerId === event.pointerId) {
+      containerRef.current?.releasePointerCapture(event.pointerId);
+      const finalDimensions = imageDimensions[resizing.id];
+      const imageId = resizing.id;
+      setResizing({ id: null, pointerId: null });
+      if (finalDimensions) {
+        await onResizeImage?.(imageId, { width: finalDimensions.width, height: finalDimensions.height });
+      }
+      return;
     }
 
     if (!dragging.id || dragging.pointerId !== event.pointerId) return;
@@ -193,6 +316,7 @@ const Canvas = ({
         const position = getImagePosition(image);
         const isDragging = dragging.id === image.id;
         const isHidden = image.hidden === true;
+        const frameDimensions = getFrameDimensions(image.id, image.width, image.height);
         return (
           <div
             className={`canvas-layer ${image.status ? `canvas-layer--${image.status}` : ''} ${isHidden ? 'canvas-layer--hidden' : ''}`}
@@ -203,6 +327,8 @@ const Canvas = ({
               cursor: isGM ? (isDragging ? 'grabbing' : 'grab') : 'default',
               userSelect: 'none',
               opacity: isHidden && isGM ? 0.4 : 1,
+              width: `${frameDimensions.width}px`,
+              height: `${frameDimensions.height}px`,
             }}
             onPointerDown={(event) => beginDrag(image, event)}
             onDragStart={(event) => event.preventDefault()}
@@ -241,13 +367,20 @@ const Canvas = ({
               alt={image.name || 'Shared image'}
               loading="lazy"
               draggable={false}
+              onLoad={(event) => handleImageLoad(image.id, event, image.width, image.height)}
               style={{ maxWidth: '100%', maxHeight: '100%' }}
             />
             {image.status && image.status !== 'done' && <span className={`badge badge--${image.status}`}>{image.status}</span>}
+            {isGM && (
+              <div
+                className="image-resize-handle"
+                onPointerDown={(event) => beginResize(image, event)}
+              />
+            )}
           </div>
         );
       }),
-    [renderImages, isGM, onRemoveImage, onToggleHidden, getImagePosition, beginDrag, dragging]
+    [renderImages, isGM, onRemoveImage, onToggleHidden, getImagePosition, getFrameDimensions, beginDrag, beginResize, dragging, handleImageLoad]
   );
 
   return (
@@ -263,7 +396,7 @@ const Canvas = ({
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleCanvasDrop}
       onPaste={handlePaste}
-      style={{ cursor: dragging.id || panning.active ? 'grabbing' : 'grab' }}
+      style={{ cursor: resizing.id ? 'nwse-resize' : (dragging.id || panning.active ? 'grabbing' : 'grab') }}
     >
       <button
         type="button"
@@ -341,12 +474,15 @@ Canvas.propTypes = {
     status: PropTypes.string,
     x: PropTypes.number,
     y: PropTypes.number,
+    width: PropTypes.number,
+    height: PropTypes.number,
     hidden: PropTypes.bool,
   })).isRequired,
   isGM: PropTypes.bool.isRequired,
   onUploadFiles: PropTypes.func,
   onShareUrl: PropTypes.func,
   onMoveImage: PropTypes.func,
+  onResizeImage: PropTypes.func,
   onRemoveImage: PropTypes.func,
   onToggleHidden: PropTypes.func,
   roomId: PropTypes.string,

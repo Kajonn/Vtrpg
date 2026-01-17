@@ -139,6 +139,23 @@ const Room = ({
     await persistPosition(imageId, position);
   };
 
+  const handleResizeImage = async (imageId, size) => {
+    if (!isGM) return;
+    onImagesUpdate((prev) => prev.map((img) => (img.id === imageId ? { ...img, ...size } : img)));
+    try {
+      const response = await fetch(`/rooms/${roomId}/images/${imageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(size),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.message || 'Failed to resize image');
+      onImagesUpdate((prev) => prev.map((img) => (img.id === imageId ? payload : img)));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const handleRemoveImage = async (imageId) => {
     if (!isGM) return;
     // Optimistically remove locally; rely on server DELETE success
@@ -216,6 +233,7 @@ const Room = ({
           onUploadFiles={handleUpload}
           onShareUrl={handleShareUrl}
           onMoveImage={handleMoveImage}
+          onResizeImage={handleResizeImage}
           onRemoveImage={handleRemoveImage}
           onToggleHidden={handleToggleHidden}
           diceRoll={diceRoll}
