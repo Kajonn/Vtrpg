@@ -289,12 +289,14 @@ test.describe('drag-drop and zoom', () => {
     await page.selectOption('select', 'gm');
     await page.click('button:has-text("Enter")');
 
-    await expect(page.getByText('Room: delta')).toBeVisible();
+    // Check for elements in the new layout (footer with title and player name)
+    await expect(page.getByText('Virtual TTRPG Board')).toBeVisible();
+    await expect(page.getByText('Returner')).toBeVisible();
 
     await page.reload();
 
     // The login form should be skipped because the session is restored
-    await expect(page.getByText('Room: delta')).toBeVisible();
+    await expect(page.getByText('Virtual TTRPG Board')).toBeVisible();
     await expect(page.getByText('Returner')).toBeVisible();
   });
 });
