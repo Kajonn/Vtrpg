@@ -5,6 +5,7 @@ server.log
 dist/
 *.db
 /server
+/vtrpg
 coverage.out
 test-results/
 playwright-report/

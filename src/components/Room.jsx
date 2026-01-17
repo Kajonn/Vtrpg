@@ -162,6 +162,9 @@ const Room = ({
     }
   };
 
+  const [showDiceLog, setShowDiceLog] = useState(false);
+  const [showGMTools, setShowGMTools] = useState(false);
+
   return (
     <section className="room">
       {uploading.length > 0 && (
@@ -189,72 +192,125 @@ const Room = ({
           userName={user.name}
         />
 
-        <section className="log-window" aria-label="dice-log">
-        <div className="log-window__header">
-          <h3>Tärningslogg</h3>
-          <span className="log-window__hint">Senaste slaget visas först</span>
-        </div>
-                {diceLog?.length ? (
-          <ol className="log-window__list">
-            {diceLog.map((entry, index) => (
-              <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
-                <div className="log-window__meta">
-                  <span>Slag av {entry.triggeredBy || 'Okänd'}</span>
-                  <span className="log-window__seed">Seed: {entry.seed}</span>
-                </div>
-                <div className="log-window__dice">
-                  {entry.results.map((result, dieIndex) => (
-                    <span key={`${entry.id}-${dieIndex}`} className="log-window__die">
-                      Tärning {dieIndex + 1}: {result}
-                    </span>
+        {/* Dice Log Toggle Button */}
+        <button
+          type="button"
+          className="overlay-toggle dice-log-toggle"
+          onClick={() => setShowDiceLog(!showDiceLog)}
+          title="Toggle Dice Log"
+        >
+          🎲 Tärningslogg
+        </button>
+
+        {/* GM Tools Toggle Button (GM only) */}
+        {isGM && (
+          <button
+            type="button"
+            className="overlay-toggle gm-tools-toggle"
+            onClick={() => setShowGMTools(!showGMTools)}
+            title="Toggle GM Tools"
+          >
+            ⚙️ GM Tools
+          </button>
+        )}
+
+        {/* Dice Log Overlay */}
+        {showDiceLog && (
+          <div className="overlay-backdrop" onClick={() => setShowDiceLog(false)}>
+            <section className="log-window overlay-window" aria-label="dice-log" onClick={(e) => e.stopPropagation()}>
+              <div className="log-window__header">
+                <h3>Tärningslogg</h3>
+                <button
+                  type="button"
+                  className="overlay-close"
+                  onClick={() => setShowDiceLog(false)}
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <span className="log-window__hint">Senaste slaget visas först</span>
+              {diceLog?.length ? (
+                <ol className="log-window__list">
+                  {diceLog.map((entry, index) => (
+                    <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
+                      <div className="log-window__meta">
+                        <span>Slag av {entry.triggeredBy || 'Okänd'}</span>
+                        <span className="log-window__seed">Seed: {entry.seed}</span>
+                      </div>
+                      <div className="log-window__dice">
+                        {entry.results.map((result, dieIndex) => (
+                          <span key={`${entry.id}-${dieIndex}`} className="log-window__die">
+                            Tärning {dieIndex + 1}: {result}
+                          </span>
+                        ))}
+                      </div>
+                    </li>
                   ))}
+                </ol>
+              ) : (
+                <p className="log-window__empty">Inga tärningsresultat ännu.</p>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* GM Tools Overlay */}
+        {isGM && showGMTools && (
+          <div className="overlay-backdrop" onClick={() => setShowGMTools(false)}>
+            <section className="gm-tools-window overlay-window" onClick={(e) => e.stopPropagation()}>
+              <div className="gm-tools__header">
+                <h3>GM Tools</h3>
+                <button
+                  type="button"
+                  className="overlay-close"
+                  onClick={() => setShowGMTools(false)}
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="gm-tools__content">
+                <div className="invite-link">
+                  <label>Shareable Room Link:</label>
+                  <code>{shareUrl}</code>
+                  <button type="button" className="ghost-button" onClick={handleCopyInvite}>
+                    Kopiera länk
+                  </button>
+                  {copyStatus && <p className="muted">{copyStatus}</p>}
                 </div>
+                <button type="button" className="ghost-button" onClick={onLogout}>
+                  Logga ut
+                </button>
+                {error && <p className="error" style={{ marginTop: '0.5rem' }}>{error}</p>}
+                {loading && <p style={{ marginTop: '0.5rem' }}>Laddar bilder...</p>}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+
+      <footer className="room-footer">
+        <div className="participant-panel">
+          <span className="participant-count">{participants.length} online</span>
+          <ul className="participant-list">
+            {participants.map((participant, index) => (
+              <li
+                key={`${participant.name}-${participant.role}-${index}`}
+                className={`participant-chip participant-chip--${participant.role}`}
+              >
+                <span className="participant-name">{participant.name}</span>
               </li>
             ))}
-          </ol>
-        ) : (
-          <p className="log-window__empty">Inga tärningsresultat ännu.</p>
+            {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
+          </ul>
+        </div>
+        {!isGM && (
+          <button type="button" className="ghost-button logout-button" onClick={onLogout}>
+            Logga ut
+          </button>
         )}
-      </section>
-    </div>
-
-      <footer className="participant-panel">
-        <div className="participant-panel__header">
-          <h3>Aktiva användare</h3>
-          <span className="participant-count">{participants.length} online</span>
-        </div>
-        <ul className="participant-list">
-          {participants.map((participant, index) => (
-            <li
-              key={`${participant.name}-${participant.role}-${index}`}
-              className={`participant-chip participant-chip--${participant.role}`}
-            >
-              <span className="participant-name">{participant.name}</span>
-              <span className="participant-role">{participant.role === 'gm' ? 'Spelledare' : 'Spelare'}</span>
-            </li>
-          ))}
-          {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
-        </ul>
       </footer>
-
-      <div className="room-footer">
-        <div className="room-footer__info">
-          <strong>Room: {roomSlug || roomId}</strong> | Inloggad som {user.name} ({isGM ? 'Spelledare' : 'Spelare'})
-          <div className="invite-link invite-link--inline">
-            <span>Dela: </span>
-            <code>{shareUrl}</code>
-            <button type="button" className="ghost-button" onClick={handleCopyInvite}>
-              Kopiera länk
-            </button>
-          </div>
-          {copyStatus && <p className="muted">{copyStatus}</p>}
-        </div>
-        <button type="button" className="ghost-button" onClick={onLogout}>
-          Logga ut
-        </button>
-        {error && <p className="error" style={{ margin: '0.5rem 0 0' }}>{error}</p>}
-        {loading && <p style={{ margin: '0.5rem 0 0' }}>Laddar bilder...</p>}
-      </div>
     </section>
   );
 };
