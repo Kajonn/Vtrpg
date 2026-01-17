@@ -73,6 +73,7 @@ func initSchema(db *sql.DB) error {
 			created_at TIMESTAMP NOT NULL,
 			x REAL NOT NULL DEFAULT 0,
 			y REAL NOT NULL DEFAULT 0,
+			hidden INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS dice_logs (
