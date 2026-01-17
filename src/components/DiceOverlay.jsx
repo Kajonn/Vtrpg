@@ -21,7 +21,7 @@ import {
   mulberry32,
 } from './DiceRenderer.jsx';
 
-const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName }) => {
+const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName, diceSettings }) => {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
   const sceneRef = useRef(null);
@@ -32,6 +32,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const sharedWorkerRef = useRef(null);
   const diceRef = useRef([]);
   const settleTimeoutRef = useRef(null);
+  const clearTimeoutRef = useRef(null);
   const stepRef = useRef(0);
   const animationRef = useRef(null);
   const pendingRollRef = useRef(null);
@@ -40,6 +41,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   const [diceSides, setDiceSides] = useState(6);
   const [status, setStatus] = useState('idle');
   const [canvasDimensions, setCanvasDimensions] = useState({ width: ARENA_WIDTH, height: ARENA_HEIGHT });
+  const [rollerName, setRollerName] = useState(null);
   const { diceModels, modelsReady } = useDiceModels();
 
   const roomKey = useMemo(() => roomId || 'default', [roomId]);
@@ -79,9 +81,29 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     }
   }, [status, onDiceResult]);
 
+  // Clear dice after configured timeout once they settle
+  useEffect(() => {
+    if (status !== 'settled') return;
+
+    const timeout = diceSettings?.clearTimeout ?? 5000;
+    clearTimeoutRef.current = setTimeout(() => {
+      teardown();
+      setStatus('idle');
+      setRollerName(null);
+    }, timeout);
+
+    return () => {
+      if (clearTimeoutRef.current) {
+        clearTimeout(clearTimeoutRef.current);
+        clearTimeoutRef.current = null;
+      }
+    };
+  }, [status]);
+
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     if (settleTimeoutRef.current) clearTimeout(settleTimeoutRef.current);
+    if (clearTimeoutRef.current) clearTimeout(clearTimeoutRef.current);
     const world = worldRef.current;
     if (world) {
       // Remove all dice
@@ -97,7 +119,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     diceRef.current = [];
     stepRef.current = 0;
     // Render one final frame to clear the canvas
-    renderFrame();
+    const { renderer, camera } = rendererRef.current || {};
+    const scene = sceneRef.current;
+    if (renderer && camera && scene) {
+      renderer.render(scene, camera);
+    }
   };
 
   const initializePhysics = useCallback(async () => {
@@ -151,6 +177,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
     integrationParameters.numInternalPgsIterations = 1;
     worldRef.current = world;
     buildBounds(world, RAPIER);
+    const velMult = diceSettings?.velocityMultiplier ?? { x: 1, y: 1, z: 1 };
     const dice = Array.from({ length: count }, () => {
       const { mesh, geometry, vertices } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
@@ -163,9 +190,9 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
         },
         velocity: {
-          x: randomInRange(rng, -600, 900),
-          y: randomInRange(rng, 320, 620),
-          z: randomInRange(rng, 0, 0),
+          x: randomInRange(rng, -600, 900) * velMult.x,
+          y: randomInRange(rng, 320, 620) * velMult.y,
+          z: randomInRange(rng, 0, 0) * velMult.z,
         },
         angularVelocity: {
           x: randomInRange(rng, -10, 10),
@@ -199,7 +226,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
     diceRef.current = preparedDice;
     stepRef.current = 0;
-  }, [diceModels]);
+  }, [diceModels, diceSettings]);
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
@@ -357,6 +384,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
   useEffect(() => {
     if (!diceRoll || !diceRoll.seed || !diceRoll.count) return;
     const nextSides = diceRoll.sides || diceSides;
+    setRollerName(diceRoll.triggeredBy || 'Okänd');
     postLocalRoll(diceRoll.seed, diceRoll.count, nextSides);
     if (diceRoll.sides) setDiceSides(diceRoll.sides);
     startSimulation(diceRoll.seed, diceRoll.count, nextSides);
@@ -414,6 +442,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
       ? crypto.getRandomValues(new Uint32Array(1))[0]
       : Math.floor(Math.random() * 1_000_000_000) || Date.now();
     const triggeredBy = userName || 'Okänd';
+    setRollerName(triggeredBy);
     setStatus('rolling');
     broadcastRoll(seed, diceCount, diceSides, triggeredBy);
     startSimulation(seed, diceCount, diceSides);
@@ -430,6 +459,11 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName 
 
   return (
     <div className="dice-overlay" aria-label="dice-overlay">
+      {rollerName && status !== 'idle' && (
+        <div className="dice-roller-label" aria-live="polite">
+          {rollerName}
+        </div>
+      )}
       <canvas ref={canvasRef} className="dice-canvas" aria-label="dice-canvas" />
       <div className="dice-controls" aria-live="polite">
         <div className="dice-count">Dice: {diceCount}</div>
@@ -477,10 +511,19 @@ DiceOverlay.propTypes = {
     seed: PropTypes.number,
     count: PropTypes.number,
     sides: PropTypes.number,
+    triggeredBy: PropTypes.string,
   }),
   onSendDiceRoll: PropTypes.func,
   onDiceResult: PropTypes.func,
   userName: PropTypes.string,
+  diceSettings: PropTypes.shape({
+    clearTimeout: PropTypes.number,
+    velocityMultiplier: PropTypes.shape({
+      x: PropTypes.number,
+      y: PropTypes.number,
+      z: PropTypes.number,
+    }),
+  }),
 };
 
 export default DiceOverlay;

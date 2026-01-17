@@ -200,6 +200,10 @@ const Room = ({
 
   const [showDiceLog, setShowDiceLog] = useState(false);
   const [showGMTools, setShowGMTools] = useState(false);
+  const [diceSettings, setDiceSettings] = useState({
+    clearTimeout: 5000,
+    velocityMultiplier: { x: 1, y: 1, z: 1 },
+  });
 
   return (
     <section className="room">
@@ -240,6 +244,7 @@ const Room = ({
           onSendDiceRoll={onSendDiceRoll}
           onDiceResult={onDiceResult}
           userName={user.name}
+          diceSettings={diceSettings}
         />
 
         {/* Dice Log Toggle Button */}
@@ -329,6 +334,83 @@ const Room = ({
                   </button>
                   {copyStatus && <p className="muted">{copyStatus}</p>}
                 </div>
+                
+                <div className="gm-tools__section">
+                  <h4>Dice Settings</h4>
+                  <div className="gm-tools__row">
+                    <label htmlFor="gm-clear-timeout">Clear timeout (ms)</label>
+                    <input
+                      id="gm-clear-timeout"
+                      type="number"
+                      min="1000"
+                      max="30000"
+                      step="500"
+                      value={diceSettings.clearTimeout}
+                      onChange={(e) => setDiceSettings(prev => ({
+                        ...prev,
+                        clearTimeout: Math.max(1000, Math.min(30000, parseInt(e.target.value, 10) || 5000)),
+                      }))}
+                    />
+                  </div>
+                  <div className="gm-tools__subsection">
+                    <span className="gm-tools__subsection-label">Velocity Multipliers</span>
+                    <div className="gm-tools__row">
+                      <label htmlFor="gm-vel-x">X</label>
+                      <input
+                        id="gm-vel-x"
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={diceSettings.velocityMultiplier.x}
+                        onChange={(e) => setDiceSettings(prev => ({
+                          ...prev,
+                          velocityMultiplier: {
+                            ...prev.velocityMultiplier,
+                            x: Math.max(0, Math.min(5, parseFloat(e.target.value) || 1)),
+                          },
+                        }))}
+                      />
+                    </div>
+                    <div className="gm-tools__row">
+                      <label htmlFor="gm-vel-y">Y</label>
+                      <input
+                        id="gm-vel-y"
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={diceSettings.velocityMultiplier.y}
+                        onChange={(e) => setDiceSettings(prev => ({
+                          ...prev,
+                          velocityMultiplier: {
+                            ...prev.velocityMultiplier,
+                            y: Math.max(0, Math.min(5, parseFloat(e.target.value) || 1)),
+                          },
+                        }))}
+                      />
+                    </div>
+                    <div className="gm-tools__row">
+                      <label htmlFor="gm-vel-z">Z</label>
+                      <input
+                        id="gm-vel-z"
+                        type="number"
+                        min="0"
+                        max="5"
+                        step="0.1"
+                        value={diceSettings.velocityMultiplier.z}
+                        onChange={(e) => setDiceSettings(prev => ({
+                          ...prev,
+                          velocityMultiplier: {
+                            ...prev.velocityMultiplier,
+                            z: Math.max(0, Math.min(5, parseFloat(e.target.value) || 1)),
+                          },
+                        }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+                
                 <button type="button" className="ghost-button" onClick={onLogout}>
                   Logga ut
                 </button>

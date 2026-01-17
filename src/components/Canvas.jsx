@@ -19,6 +19,7 @@ const Canvas = ({
   onSendDiceRoll,
   onDiceResult,
   userName,
+  diceSettings,
 }) => {
   const containerRef = useRef(null);
   const [scale, setScale] = useState(1);
@@ -457,6 +458,7 @@ const Canvas = ({
           onSendDiceRoll={onSendDiceRoll}
           onDiceResult={onDiceResult}
           userName={userName}
+          diceSettings={diceSettings}
         />
       )}
       <div className="canvas-inner" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
@@ -494,6 +496,14 @@ Canvas.propTypes = {
   onSendDiceRoll: PropTypes.func,
   onDiceResult: PropTypes.func,
   userName: PropTypes.string,
+  diceSettings: PropTypes.shape({
+    clearTimeout: PropTypes.number,
+    velocityMultiplier: PropTypes.shape({
+      x: PropTypes.number,
+      y: PropTypes.number,
+      z: PropTypes.number,
+    }),
+  }),
 };
 
 export default Canvas;
