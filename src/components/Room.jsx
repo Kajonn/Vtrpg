@@ -153,7 +153,7 @@ const Room = ({
   const handleShareUrl = async (url, position) => {
     if (!isGM) return;
     if (!/^https?:\/\//.test(url)) return;
-    const confirmed = window.confirm(`Dela denna bild-URL?\n${url}`);
+    const confirmed = window.confirm(`Share this image URL?\n${url}`);
     if (!confirmed) return;
     try {
       setError('');
@@ -231,10 +231,10 @@ const Room = ({
     setCopyStatus('');
     try {
       await navigator.clipboard.writeText(shareUrl);
-      setCopyStatus('Länken kopierades.');
+      setCopyStatus('Link copied.');
       setTimeout(() => setCopyStatus(''), 2000);
     } catch (err) {
-      setCopyStatus('Kunde inte kopiera länken.');
+      setCopyStatus('Could not copy link.');
     }
   };
 
@@ -265,7 +265,7 @@ const Room = ({
       )}
       {loading && (
         <div className="notification notification--loading">
-          Laddar bilder...
+          Loading images...
         </div>
       )}
 
@@ -294,7 +294,7 @@ const Room = ({
           onClick={() => setShowDiceLog(!showDiceLog)}
           title="Toggle Dice Log"
         >
-          🎲 Tärningslogg
+          🎲 Dice Log
         </button>
 
         {/* GM Tools Toggle Button (GM only) */}
@@ -314,7 +314,7 @@ const Room = ({
           <div className="overlay-backdrop" onClick={() => setShowDiceLog(false)}>
             <section className="log-window overlay-window" aria-label="dice-log" onClick={(e) => e.stopPropagation()}>
               <div className="log-window__header">
-                <h3>Tärningslogg</h3>
+                <h3>Dice Log</h3>
                 <button
                   type="button"
                   className="overlay-close"
@@ -324,19 +324,19 @@ const Room = ({
                   ✕
                 </button>
               </div>
-              <span className="log-window__hint">Senaste slaget visas först</span>
+              <span className="log-window__hint">Most recent roll shown first</span>
               {diceLog?.length ? (
                 <ol className="log-window__list">
                   {diceLog.map((entry, index) => (
                     <li key={entry.id || `${entry.seed}-${index}`} className="log-window__item">
                       <div className="log-window__meta">
-                        <span>Slag av {entry.triggeredBy || 'Okänd'}</span>
+                        <span>Roll by {entry.triggeredBy || 'Unknown'}</span>
                         <span className="log-window__seed">Seed: {entry.seed}</span>
                       </div>
                       <div className="log-window__dice">
                         {entry.results.map((result, dieIndex) => (
                           <span key={`${entry.id}-${dieIndex}`} className="log-window__die">
-                            Tärning {dieIndex + 1}: {result}
+                            Die {dieIndex + 1}: {result}
                           </span>
                         ))}
                       </div>
@@ -344,7 +344,7 @@ const Room = ({
                   ))}
                 </ol>
               ) : (
-                <p className="log-window__empty">Inga tärningsresultat ännu.</p>
+                <p className="log-window__empty">No dice results yet.</p>
               )}
             </section>
           </div>
@@ -370,7 +370,7 @@ const Room = ({
                   <label>Shareable Room Link:</label>
                   <code>{shareUrl}</code>
                   <button type="button" className="ghost-button" onClick={handleCopyInvite}>
-                    Kopiera länk
+                    Copy link
                   </button>
                   {copyStatus && <p className="muted">{copyStatus}</p>}
                 </div>
@@ -501,7 +501,7 @@ const Room = ({
                 <span className="participant-name">{participant.name}</span>
               </li>
             ))}
-            {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
+            {participants.length === 0 && <li className="participant-chip">No active users</li>}
           </ul>
         </div>
         <div className="room-footer__actions">
@@ -510,7 +510,7 @@ const Room = ({
           </Link>
           {!isGM && (
             <button type="button" className="ghost-button logout-button" onClick={onLogout}>
-              Logga ut
+              Log out
             </button>
           )}
         </div>

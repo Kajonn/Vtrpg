@@ -26,11 +26,11 @@ test.describe('join page', () => {
     });
 
     await page.goto(`/room/${roomSlug}`);
-    const nameInput = page.getByLabel('Ditt namn');
+    const nameInput = page.getByLabel('Your name');
     await nameInput.fill('  Adventurer  ');
     await expect(nameInput).toHaveValue('  Adventurer  ');
 
-    await page.getByRole('button', { name: 'Gå med i rummet' }).click();
+    await page.getByRole('button', { name: 'Join room' }).click();
     await page.waitForURL(`**/rooms/${roomSlug}`);
     expect(page.url()).toContain(`/rooms/${roomSlug}`);
   });
@@ -45,8 +45,8 @@ test.describe('join page', () => {
 
     await page.goto(`/room/${roomSlug}`);
 
-    await expect(page.getByText('Rummet kunde inte hittas.')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Försök igen' })).toBeEnabled();
+    await expect(page.getByText('Room not found.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again' })).toBeEnabled();
   });
 
   test('shows join errors returned by the server', async ({ page }) => {
@@ -65,8 +65,8 @@ test.describe('join page', () => {
     });
 
     await page.goto(`/room/${roomSlug}`);
-    await page.getByLabel('Ditt namn').fill('Player');
-    await page.getByRole('button', { name: 'Gå med i rummet' }).click();
+    await page.getByLabel('Your name').fill('Player');
+    await page.getByRole('button', { name: 'Join room' }).click();
 
     await expect(page.getByText('room full')).toBeVisible();
     expect(page.url()).toContain(`/room/${roomSlug}`);

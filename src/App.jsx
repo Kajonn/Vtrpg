@@ -95,12 +95,12 @@ const useWebSocket = (roomId, user, onMessage, onError) => {
       }
     });
     ws.addEventListener('error', () => {
-      onError?.('Kunde inte ansluta till liveuppdateringar.');
+      onError?.('Could not connect to live updates.');
     });
     ws.addEventListener('close', (event) => {
       setSocket(null);
       if (event.code === 1006 || event.code === 1008) {
-        onError?.('Anslutningen till rummet stängdes.');
+        onError?.('Connection to room was closed.');
       }
     });
     return () => {
