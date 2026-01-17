@@ -195,6 +195,7 @@ type imageResponse struct {
 	CreatedAt time.Time `json:"createdAt"`
 	X         float64   `json:"x"`
 	Y         float64   `json:"y"`
+	Hidden    bool      `json:"hidden"`
 }
 
 type diceLogEntry struct {
@@ -750,14 +751,15 @@ func (s *Server) handleImageDelete(w http.ResponseWriter, r *http.Request, roomI
 
 func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomID, imageID string) {
 	var payload struct {
-		X *float64 `json:"x"`
-		Y *float64 `json:"y"`
+		X      *float64 `json:"x"`
+		Y      *float64 `json:"y"`
+		Hidden *bool    `json:"hidden"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if payload.X == nil && payload.Y == nil {
+	if payload.X == nil && payload.Y == nil && payload.Hidden == nil {
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
@@ -770,7 +772,7 @@ func (s *Server) handleImageUpdate(w http.ResponseWriter, r *http.Request, roomI
 		http.Error(w, "invalid y coordinate", http.StatusBadRequest)
 		return
 	}
-	img, ok, err := s.updateImage(roomID, imageID, payload.X, payload.Y)
+	img, ok, err := s.updateImage(roomID, imageID, payload.X, payload.Y, payload.Hidden)
 	if err != nil {
 		s.logger.Error("update image", slog.String("error", err.Error()))
 		http.Error(w, "failed to update image", http.StatusInternalServerError)
@@ -835,7 +837,7 @@ func (s *Server) handleDiceLogCreate(w http.ResponseWriter, r *http.Request, roo
 }
 
 func (s *Server) getImages(roomID string) ([]imageResponse, error) {
-	rows, err := s.db.Query(`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE room_id = ? ORDER BY created_at ASC, id ASC`, roomID)
+	rows, err := s.db.Query(`SELECT id, room_id, url, status, created_at, x, y, hidden FROM images WHERE room_id = ? ORDER BY created_at ASC, id ASC`, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -844,10 +846,12 @@ func (s *Server) getImages(roomID string) ([]imageResponse, error) {
 	images := make([]imageResponse, 0)
 	for rows.Next() {
 		var img imageResponse
-		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y); err != nil {
+		var hidden int
+		if err := rows.Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y, &hidden); err != nil {
 			return nil, err
 		}
 		img.CreatedAt = img.CreatedAt.UTC()
+		img.Hidden = hidden != 0
 		images = append(images, img)
 	}
 	if err := rows.Err(); err != nil {
@@ -890,9 +894,13 @@ func (s *Server) storeImage(roomID string, img imageResponse) (imageResponse, er
 	if img.CreatedAt.IsZero() {
 		img.CreatedAt = time.Now().UTC()
 	}
+	hidden := 0
+	if img.Hidden {
+		hidden = 1
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO images (id, room_id, url, status, created_at, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		img.ID, img.RoomID, img.URL, img.Status, img.CreatedAt, img.X, img.Y,
+		`INSERT INTO images (id, room_id, url, status, created_at, x, y, hidden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		img.ID, img.RoomID, img.URL, img.Status, img.CreatedAt, img.X, img.Y, hidden,
 	)
 	return img, err
 }
@@ -965,41 +973,52 @@ func (s *Server) isGMActive(roomID string) bool {
 
 func (s *Server) deleteImage(roomID, imageID string) (imageResponse, bool, error) {
 	var img imageResponse
+	var hidden int
 	err := s.db.QueryRow(
-		`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE id = ? AND room_id = ?`,
+		`SELECT id, room_id, url, status, created_at, x, y, hidden FROM images WHERE id = ? AND room_id = ?`,
 		imageID, roomID,
-	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y)
+	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y, &hidden)
 	if errors.Is(err, sql.ErrNoRows) {
 		return imageResponse{}, false, nil
 	}
 	if err != nil {
 		return imageResponse{}, false, err
 	}
+	img.Hidden = hidden != 0
 	if _, err := s.db.Exec(`DELETE FROM images WHERE id = ? AND room_id = ?`, imageID, roomID); err != nil {
 		return imageResponse{}, false, err
 	}
 	return img, true, nil
 }
 
-func (s *Server) updateImage(roomID, imageID string, x, y *float64) (imageResponse, bool, error) {
+func (s *Server) updateImage(roomID, imageID string, x, y *float64, hidden *bool) (imageResponse, bool, error) {
 	var img imageResponse
+	var hiddenInt int
 	err := s.db.QueryRow(
-		`SELECT id, room_id, url, status, created_at, x, y FROM images WHERE id = ? AND room_id = ?`,
+		`SELECT id, room_id, url, status, created_at, x, y, hidden FROM images WHERE id = ? AND room_id = ?`,
 		imageID, roomID,
-	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y)
+	).Scan(&img.ID, &img.RoomID, &img.URL, &img.Status, &img.CreatedAt, &img.X, &img.Y, &hiddenInt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return imageResponse{}, false, nil
 	}
 	if err != nil {
 		return imageResponse{}, false, err
 	}
+	img.Hidden = hiddenInt != 0
 	if x != nil {
 		img.X = *x
 	}
 	if y != nil {
 		img.Y = *y
 	}
-	if _, err := s.db.Exec(`UPDATE images SET x = ?, y = ? WHERE id = ? AND room_id = ?`, img.X, img.Y, imageID, roomID); err != nil {
+	if hidden != nil {
+		img.Hidden = *hidden
+	}
+	hiddenValue := 0
+	if img.Hidden {
+		hiddenValue = 1
+	}
+	if _, err := s.db.Exec(`UPDATE images SET x = ?, y = ?, hidden = ? WHERE id = ? AND room_id = ?`, img.X, img.Y, hiddenValue, imageID, roomID); err != nil {
 		return imageResponse{}, false, err
 	}
 	return img, true, nil
