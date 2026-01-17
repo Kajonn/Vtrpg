@@ -36,7 +36,7 @@ const Canvas = ({
     // Filter hidden images for players
     const filteredImages = isGM 
       ? images 
-      : images.filter((img) => !img.hidden);
+      : images.filter((img) => img.hidden !== true);
     const nextImages = filteredImages.filter((img) => !removedIdsRef.current.has(img.id));
     setRenderImages(nextImages);
     
