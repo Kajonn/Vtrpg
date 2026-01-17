@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -46,6 +47,7 @@ func initSchema(db *sql.DB) error {
 			id TEXT PRIMARY KEY,
 			slug TEXT NOT NULL UNIQUE,
 			name TEXT NOT NULL,
+			theme TEXT NOT NULL DEFAULT 'default',
 			created_by TEXT,
 			created_at TIMESTAMP NOT NULL
 		);`,
@@ -73,6 +75,8 @@ func initSchema(db *sql.DB) error {
 			created_at TIMESTAMP NOT NULL,
 			x REAL NOT NULL DEFAULT 0,
 			y REAL NOT NULL DEFAULT 0,
+			width REAL NOT NULL DEFAULT 0,
+			height REAL NOT NULL DEFAULT 0,
 			hidden INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(room_id) REFERENCES rooms(id) ON DELETE CASCADE
 		);`,
@@ -95,6 +99,14 @@ func initSchema(db *sql.DB) error {
 	for _, stmt := range schema {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("apply schema: %w", err)
+		}
+	}
+
+	// Migration: add theme column if it doesn't exist
+	if _, err := db.Exec(`ALTER TABLE rooms ADD COLUMN theme TEXT NOT NULL DEFAULT 'default'`); err != nil {
+		// Ignore error if column already exists (SQLite returns an error for duplicate columns)
+		if err.Error() != "duplicate column name: theme" && !strings.Contains(err.Error(), "duplicate column") {
+			// Column might already exist, which is fine
 		}
 	}
 

@@ -28,11 +28,100 @@ type Player struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// Theme represents a room's color theme.
+type Theme string
+
+const (
+	ThemeDefault    Theme = "default"    // Dark blue (current)
+	ThemeDracula    Theme = "dracula"    // Purple/pink
+	ThemeNord       Theme = "nord"       // Cool blue-gray
+	ThemeGruvbox    Theme = "gruvbox"    // Warm brown/orange
+	ThemeSolarized  Theme = "solarized"  // Teal/yellow
+	ThemeMonokai    Theme = "monokai"    // Green/pink on dark
+	ThemeForest     Theme = "forest"     // Deep green
+	ThemeSunset     Theme = "sunset"     // Orange/red warm
+	ThemeOcean      Theme = "ocean"      // Deep ocean blue
+	ThemeCyberpunk  Theme = "cyberpunk"  // Neon pink/cyan
+	ThemeVampire    Theme = "vampire"    // Dark red/crimson
+	ThemeMidnight   Theme = "midnight"   // Deep purple/indigo
+	ThemeAurora     Theme = "aurora"     // Northern lights
+	ThemeDesert     Theme = "desert"     // Sandy warm tones
+	ThemeArctic     Theme = "arctic"     // Icy blue/white
+	ThemeLavender   Theme = "lavender"   // Soft purple
+	ThemeRose       Theme = "rose"       // Pink/rose gold
+	ThemeEmerald    Theme = "emerald"    // Rich green/gold
+	ThemeSlate      Theme = "slate"      // Gray/silver
+	ThemeCoffee     Theme = "coffee"     // Brown/cream
+	ThemeNeon       Theme = "neon"       // Bright neon green
+	ThemePlum       Theme = "plum"       // Deep purple/magenta
+	ThemeStorm      Theme = "storm"      // Thunder gray/electric
+	ThemeCherry     Theme = "cherry"     // Cherry blossom pink
+	ThemeGalaxy     Theme = "galaxy"     // Deep space purple
+	ThemeMint       Theme = "mint"       // Fresh mint green
+	ThemeRust       Theme = "rust"       // Rustic orange/brown
+	ThemeSapphire   Theme = "sapphire"   // Royal blue
+	ThemeCoral      Theme = "coral"      // Coral reef orange/pink
+	ThemeOnyx       Theme = "onyx"       // Pure black/white
+	ThemeAmber      Theme = "amber"      // Golden amber
+	ThemeTwilight   Theme = "twilight"   // Dusk purple/orange
+	ThemePine       Theme = "pine"       // Dark pine green
+	ThemeMaroon     Theme = "maroon"     // Deep maroon/burgundy
+)
+
+// ValidThemes lists all supported themes.
+var ValidThemes = []Theme{
+	ThemeDefault,
+	ThemeDracula,
+	ThemeNord,
+	ThemeGruvbox,
+	ThemeSolarized,
+	ThemeMonokai,
+	ThemeForest,
+	ThemeSunset,
+	ThemeOcean,
+	ThemeCyberpunk,
+	ThemeVampire,
+	ThemeMidnight,
+	ThemeAurora,
+	ThemeDesert,
+	ThemeArctic,
+	ThemeLavender,
+	ThemeRose,
+	ThemeEmerald,
+	ThemeSlate,
+	ThemeCoffee,
+	ThemeNeon,
+	ThemePlum,
+	ThemeStorm,
+	ThemeCherry,
+	ThemeGalaxy,
+	ThemeMint,
+	ThemeRust,
+	ThemeSapphire,
+	ThemeCoral,
+	ThemeOnyx,
+	ThemeAmber,
+	ThemeTwilight,
+	ThemePine,
+	ThemeMaroon,
+}
+
+// IsValidTheme checks if a theme name is supported.
+func IsValidTheme(t Theme) bool {
+	for _, valid := range ValidThemes {
+		if t == valid {
+			return true
+		}
+	}
+	return false
+}
+
 // Room represents a shared space.
 type Room struct {
 	ID        string    `json:"id"`
 	Slug      string    `json:"slug"`
 	Name      string    `json:"name"`
+	Theme     Theme     `json:"theme"`
 	CreatedBy string    `json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`
 }

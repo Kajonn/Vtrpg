@@ -80,11 +80,11 @@ const AdminRooms = () => {
       const response = await fetch('/admin/rooms', { headers: authHeaders });
       const payload = await response.json().catch(() => []);
       if (!response.ok) {
-        throw new Error(payload?.error || 'Kunde inte hämta rum.');
+        throw new Error(payload?.error || 'Could not fetch rooms.');
       }
       setRooms(Array.isArray(payload) ? payload : []);
     } catch (err) {
-      setError(err.message || 'Kunde inte hämta rum.');
+      setError(err.message || 'Could not fetch rooms.');
     } finally {
       setLoading(false);
     }
@@ -102,7 +102,7 @@ const AdminRooms = () => {
 
   const handleDelete = useCallback(
     async (room) => {
-      if (!window.confirm(`Ta bort rummet "${room.name}"? Detta går inte att ångra.`)) return;
+      if (!window.confirm(`Delete room "${room.name}"? This cannot be undone.`)) return;
       setDeleting((prev) => ({ ...prev, [room.id]: true }));
       setError('');
       try {
@@ -112,11 +112,11 @@ const AdminRooms = () => {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(payload?.error || 'Kunde inte ta bort rummet.');
+          throw new Error(payload?.error || 'Could not delete room.');
         }
         await fetchRooms();
       } catch (err) {
-        setError(err.message || 'Kunde inte ta bort rummet.');
+        setError(err.message || 'Could not delete room.');
       } finally {
         setDeleting((prev) => {
           const next = { ...prev };
@@ -133,15 +133,15 @@ const AdminRooms = () => {
       <div className="card card--wide">
         <div className="card__header">
           <div>
-            <p className="muted">Administratör</p>
-            <h2>Rumöversikt</h2>
+            <p className="muted">Administrator</p>
+            <h2>Room overview</h2>
           </div>
           <div className="page__actions">
             <Link to="/" className="ghost-button">
-              Tillbaka
+              Back
             </Link>
             <button type="button" onClick={fetchRooms} className="ghost-button" disabled={loading}>
-              Uppdatera
+              Refresh
             </button>
             <input
               type="password"
@@ -156,18 +156,18 @@ const AdminRooms = () => {
 
         {error && <p className="error">{error}</p>}
         {loading ? (
-          <p className="muted">Laddar rum...</p>
+          <p className="muted">Loading rooms...</p>
         ) : (
           <div className="admin-table-wrapper">
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Rum</th>
-                  <th>Aktiva användare</th>
+                  <th>Room</th>
+                  <th>Active users</th>
                   <th>Disk</th>
-                  <th>Senast använd</th>
-                  <th>Totalt aktiv</th>
-                  <th>Åtgärder</th>
+                  <th>Last used</th>
+                  <th>Total active</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -178,7 +178,7 @@ const AdminRooms = () => {
                         <strong>{room.name}</strong>
                         <p className="muted">{room.slug || room.id}</p>
                       </div>
-                      {room.active && <span className="badge badge--active">Aktiv</span>}
+                      {room.active && <span className="badge badge--active">Active</span>}
                     </td>
                     <td>
                       <ActiveUsers users={room.activeUsers} />
@@ -195,14 +195,14 @@ const AdminRooms = () => {
                         onClick={() => handleDelete(room)}
                         disabled={deleting[room.id]}
                       >
-                        {deleting[room.id] ? 'Tar bort...' : 'Ta bort'}
+                        {deleting[room.id] ? 'Deleting...' : 'Delete'}
                       </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {!sortedRooms.length && <p className="muted">Inga rum hittades.</p>}
+            {!sortedRooms.length && <p className="muted">No rooms found.</p>}
           </div>
         )}
       </div>
