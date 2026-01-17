@@ -178,6 +178,18 @@ const Room = ({
         </ul>
       )}
 
+      {/* Error and loading notifications - visible to all users */}
+      {error && (
+        <div className="notification notification--error">
+          {error}
+        </div>
+      )}
+      {loading && (
+        <div className="notification notification--loading">
+          Laddar bilder...
+        </div>
+      )}
+
       <div className="room-main">
         <Canvas
           images={images}
@@ -283,8 +295,6 @@ const Room = ({
                 <button type="button" className="ghost-button" onClick={onLogout}>
                   Logga ut
                 </button>
-                {error && <p className="error" style={{ marginTop: '0.5rem' }}>{error}</p>}
-                {loading && <p style={{ marginTop: '0.5rem' }}>Laddar bilder...</p>}
               </div>
             </section>
           </div>

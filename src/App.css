@@ -219,6 +219,32 @@
   color: #f43f5e;
 }
 
+.notification {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  font-weight: 600;
+  pointer-events: none;
+  max-width: 90vw;
+  text-align: center;
+}
+
+.notification--error {
+  border-color: #fecdd3;
+  color: #f43f5e;
+}
+
+.notification--loading {
+  border-color: #22d3ee;
+  color: #22d3ee;
+}
+
 .card--wide {
   width: 100%;
   max-width: 1200px;
