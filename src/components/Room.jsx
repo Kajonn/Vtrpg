@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
+import { Link } from 'react-router-dom';
 import Canvas from './Canvas.jsx';
 
 const fetchImages = async (roomId) => {
@@ -291,6 +292,7 @@ const Room = ({
       </div>
 
       <footer className="room-footer">
+        <h3 className="room-footer__title">Virtual TTRPG Board</h3>
         <div className="participant-panel">
           <span className="participant-count">{participants.length} online</span>
           <ul className="participant-list">
@@ -305,11 +307,16 @@ const Room = ({
             {participants.length === 0 && <li className="participant-chip">Inga aktiva användare</li>}
           </ul>
         </div>
-        {!isGM && (
-          <button type="button" className="ghost-button logout-button" onClick={onLogout}>
-            Logga ut
-          </button>
-        )}
+        <div className="room-footer__actions">
+          <Link to="/admin" className="ghost-button">
+            Admin
+          </Link>
+          {!isGM && (
+            <button type="button" className="ghost-button logout-button" onClick={onLogout}>
+              Logga ut
+            </button>
+          )}
+        </div>
       </footer>
     </section>
   );
