@@ -113,9 +113,20 @@ test.describe('drag-drop and zoom', () => {
     // Move the image up to avoid footer covering the remove button
     await firstLayer.hover();
     await page.mouse.down();
-    await page.mouse.move(400, 100); // Move to top area away from footer
+    // Move to top area away from footer - use relative positioning
+    const viewport = page.viewportSize();
+    await page.mouse.move(viewport.width / 2, 100); // Center horizontally, near top
     await page.mouse.up();
-    await page.waitForTimeout(500); // Wait for position update
+    // Wait for the image position to actually update
+    await page.waitForFunction((id) => {
+      const el = document.querySelector(`.canvas-layer[data-id="${id}"]`);
+      if (!el) return false;
+      const rect = el.getBoundingBox();
+      return rect && rect.y < 150; // Verify it moved to top area
+    }, firstId, { timeout: 3000 }).catch(() => {
+      // If position check fails, continue anyway with a small delay
+      return page.waitForTimeout(500);
+    });
     // Click the remove button using bounding box to avoid viewport issues
     const removeButton = page.locator('.image-remove').first();
     const box = await removeButton.boundingBox();
