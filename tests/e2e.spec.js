@@ -37,9 +37,11 @@ const adminRooms = [
 
 test.describe('drag-drop and zoom', () => {
   let gmLocked = false;
+  let deletedImages = new Set();
 
   test.beforeEach(async ({ page }) => {
     gmLocked = false;
+    deletedImages = new Set();
     await page.route('**/rooms/**', (route, request) => {
       const method = request.method();
       const url = request.url();
@@ -66,7 +68,8 @@ test.describe('drag-drop and zoom', () => {
         return route.fulfill({ status: 200, body: JSON.stringify({ id: 'dice-log', ...body }) });
       }
       if (method === 'GET' && url.includes('/images')) {
-        return route.fulfill({ status: 200, body: JSON.stringify([mockImage]) });
+        const remaining = deletedImages.has(mockImage.id) ? [] : [mockImage];
+        return route.fulfill({ status: 200, body: JSON.stringify(remaining) });
       }
       if (method === 'POST' && url.includes('/images')) {
         return route.fulfill({ status: 200, body: JSON.stringify({ ...mockImage, id: 'upload' }) });
@@ -77,6 +80,8 @@ test.describe('drag-drop and zoom', () => {
         return route.fulfill({ status: 200, body: JSON.stringify({ ...mockImage, id, ...body }) });
       }
       if (method === 'DELETE' && url.includes('/images')) {
+        const imageId = url.split('/').pop();
+        deletedImages.add(imageId);
         return route.fulfill({ status: 200, body: JSON.stringify({ status: 'deleted' }) });
       }
       return route.fallback();
@@ -156,8 +161,9 @@ test.describe('drag-drop and zoom', () => {
     // Wait for the initial image to load
     await expect(page.locator('.canvas-layer')).toHaveCount(1);
 
-    // Click the remove button
+    // Click the remove button and accept the confirmation dialog
     const removeButton = page.locator('.image-remove').first();
+    page.once('dialog', (dialog) => dialog.accept());
     await removeButton.click();
 
     // Verify the image is removed
@@ -1099,7 +1105,7 @@ test.describe('admin rooms', () => {
     await expect(activeRow).toBeVisible();
     await expect(activeRow).toContainText('Active Room');
     await expect(activeRow).toContainText('alpha-admin');
-    await expect(activeRow).toContainText('Aktiv');
+    await expect(activeRow).toContainText('Active');
     await expect(activeRow).toContainText('GM: Guide');
     await expect(activeRow).toContainText('Player One');
     await expect(activeRow).toContainText('2.0 KB');
@@ -1116,7 +1122,7 @@ test.describe('admin rooms', () => {
 
     const targetRow = page.getByRole('row', { name: /Spooky Lair/ });
     page.once('dialog', (dialog) => dialog.accept());
-    await targetRow.getByRole('button', { name: /Ta bort/ }).click();
+    await targetRow.getByRole('button', { name: /Delete/ }).click();
 
     await expect(page.getByText('Spooky Lair')).toBeHidden({ timeout: 5000 });
   });
