@@ -25,15 +25,15 @@ const JoinBySlug = ({ onJoinSuccess, existingSession }) => {
         if (response.ok) return response.json();
         const payload = await response.json().catch(() => ({}));
         if (response.status === 404) {
-          throw new Error('Rummet kunde inte hittas.');
+          throw new Error('Room not found.');
         }
-        throw new Error(payload?.error || 'Kunde inte hämta rummet.');
+        throw new Error(payload?.error || 'Could not fetch room.');
       })
       .then((data) => {
         setRoom(data);
       })
       .catch((err) => {
-        setError(err.message || 'Kunde inte ladda rummet.');
+        setError(err.message || 'Could not load room.');
       })
       .finally(() => setLoading(false));
   }, [slug]);
@@ -61,34 +61,34 @@ const JoinBySlug = ({ onJoinSuccess, existingSession }) => {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.error || 'Kunde inte gå med i rummet.');
+        throw new Error(payload?.error || 'Could not join room.');
       }
       onJoinSuccess?.(payload, slug);
       navigate(`/rooms/${payload.roomSlug || slug || payload.roomId}`, { replace: true });
     } catch (err) {
-      setError(err.message || 'Kunde inte gå med i rummet.');
+      setError(err.message || 'Could not join room.');
     } finally {
       setJoining(false);
     }
   };
 
   const showForm = !loading && !error;
-  const roomName = room?.name || 'Namnlöst rum';
+  const roomName = room?.name || 'Unnamed room';
 
   return (
     <section className="page">
       <div className="card">
-        <h2>Gå med i rum</h2>
-        {loading && <p>Laddar rum...</p>}
+        <h2>Join room</h2>
+        {loading && <p>Loading room...</p>}
         {error && (
           <>
             <p className="error">{error}</p>
             <div className="page__actions">
               <button type="button" onClick={loadRoom} disabled={loading}>
-                Försök igen
+                Try again
               </button>
               <button type="button" className="ghost-button" onClick={() => navigate('/')}>
-                Till startsidan
+                Go to home
               </button>
             </div>
           </>
@@ -96,27 +96,27 @@ const JoinBySlug = ({ onJoinSuccess, existingSession }) => {
         {showForm && (
           <>
             <p className="muted">
-              Du ansluter till <strong>{roomName}</strong> ({room?.slug || slug}).
+              You are joining <strong>{roomName}</strong> ({room?.slug || slug}).
             </p>
             <form onSubmit={handleSubmit} className="page__form">
               <label>
-                Ditt namn
+                Your name
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required
                   minLength={2}
                   maxLength={32}
-                  placeholder="Ange spelarnamn"
+                  placeholder="Enter player name"
                 />
               </label>
-              <p className="muted">Du ansluter som spelare.</p>
+              <p className="muted">You will join as a player.</p>
               <div className="page__actions">
                 <button type="submit" disabled={joining}>
-                  {joining ? 'Ansluter...' : 'Gå med i rummet'}
+                  {joining ? 'Joining...' : 'Join room'}
                 </button>
                 <button type="button" className="ghost-button" onClick={() => navigate('/')}>
-                  Till startsidan
+                  Go to home
                 </button>
               </div>
             </form>

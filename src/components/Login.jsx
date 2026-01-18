@@ -63,7 +63,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
     const trimmedName = roomName.trim();
     const trimmedCreator = creatorName.trim();
     if (!trimmedCreator) {
-      setCreateError('Ange ditt namn för att skapa ett rum.');
+      setCreateError('Enter your name to create a room.');
       return;
     }
     setCreating(true);
@@ -75,7 +75,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload?.error || 'Kunde inte skapa rummet.');
+        throw new Error(payload?.error || 'Could not create room.');
       }
       setCreatedRoom(payload);
       const nextRoom = payload.slug || payload.id;
@@ -86,7 +86,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
       setName((prev) => prev || trimmedCreator);
       setRole('gm');
     } catch (err) {
-      setCreateError(err.message || 'Kunde inte skapa rummet.');
+      setCreateError(err.message || 'Could not create room.');
     } finally {
       setCreating(false);
     }
@@ -96,10 +96,10 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
     if (!inviteUrl) return;
     try {
       await navigator.clipboard.writeText(inviteUrl);
-      setCopyStatus('Länken kopierades.');
+      setCopyStatus('Link copied.');
       setTimeout(() => setCopyStatus(''), 2000);
     } catch (err) {
-      setCopyStatus('Kunde inte kopiera länken.');
+      setCopyStatus('Could not copy link.');
     }
   };
 
@@ -128,49 +128,49 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
         <label>
           Role
           <select value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="gm">Spelledare</option>
-            <option value="player">Spelare</option>
+            <option value="gm">Game Master</option>
+            <option value="player">Player</option>
           </select>
         </label>
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={submitting}>
-          {submitting ? 'Kontrollerar...' : 'Enter'}
+          {submitting ? 'Verifying...' : 'Enter'}
         </button>
       </form>
 
       <form className="card__section" onSubmit={handleCreate}>
-        <h2>Skapa nytt rum</h2>
+        <h2>Create new room</h2>
         <label>
-          Rumnamn (valfritt)
+          Room name (optional)
           <input
             value={roomName}
             onChange={(e) => setRoomName(e.target.value)}
-            placeholder="Ex: Kvällsäventyr"
+            placeholder="e.g., Evening Adventure"
           />
         </label>
         <label>
-          Ditt namn
+          Your name
           <input
             value={creatorName}
             onChange={(e) => setCreatorName(e.target.value)}
             required
-            placeholder="Ex: Spelledare"
+            placeholder="e.g., Game Master"
           />
         </label>
         {createError && <p className="error">{createError}</p>}
         <button type="submit" disabled={creating}>
-          {creating ? 'Skapar...' : 'Skapa rum'}
+          {creating ? 'Creating...' : 'Create room'}
         </button>
 
         {createdRoom && (
           <div className="invite-box">
             <p className="muted">
-              Rum skapades. Dela länken för spelare att ansluta:
+              Room created. Share the link for players to join:
             </p>
             <div className="invite-link">
               <code>{inviteUrl}</code>
               <button type="button" onClick={handleCopyInvite} className="ghost-button">
-                Kopiera länk
+                Copy link
               </button>
             </div>
             {copyStatus && <p className="muted">{copyStatus}</p>}

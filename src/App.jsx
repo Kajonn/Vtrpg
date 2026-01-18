@@ -61,6 +61,7 @@ const loadPersistedSession = () => {
         user: parsed.user,
         playerId: parsed.playerId,
         playerToken: parsed.playerToken,
+        theme: parsed.theme || 'default',
       };
     }
   } catch (err) {
@@ -95,12 +96,12 @@ const useWebSocket = (roomId, user, onMessage, onError) => {
       }
     });
     ws.addEventListener('error', () => {
-      onError?.('Kunde inte ansluta till liveuppdateringar.');
+      onError?.('Could not connect to live updates.');
     });
     ws.addEventListener('close', (event) => {
       setSocket(null);
       if (event.code === 1006 || event.code === 1008) {
-        onError?.('Anslutningen till rummet stängdes.');
+        onError?.('Connection to room was closed.');
       }
     });
     return () => {
@@ -123,6 +124,8 @@ const RoomRoute = ({
   onSendDiceRoll,
   diceLog,
   onDiceResult,
+  theme,
+  onThemeChange,
 }) => {
   const { roomIdentifier } = useParams();
   if (!session?.roomId || !session?.user) {
@@ -149,6 +152,8 @@ const RoomRoute = ({
       onSendDiceRoll={onSendDiceRoll}
       diceLog={diceLog}
       onDiceResult={onDiceResult}
+      theme={theme}
+      onThemeChange={onThemeChange}
     />
   );
 };
@@ -163,6 +168,7 @@ const App = () => {
   const [connectionError, setConnectionError] = useState('');
   const [diceRoll, setDiceRoll] = useState(null);
   const [diceLog, setDiceLog] = useState([]);
+  const [roomTheme, setRoomTheme] = useState(() => initialSession?.theme || 'default');
   const diceChannelRef = useRef(null);
 
   const navigate = useNavigate();
@@ -171,6 +177,11 @@ const App = () => {
   const user = session?.user || null;
   const roomId = session?.roomId || '';
   const roomSlug = session?.roomSlug || '';
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', roomTheme);
+  }, [roomTheme]);
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
@@ -181,9 +192,10 @@ const App = () => {
     const payload = {
       ...session,
       roomSlug: roomSlug || roomId,
+      theme: roomTheme,  
     };
     localStorage.setItem('vtrpg.session', JSON.stringify(payload));
-  }, [session, user?.name, user?.role, roomId, roomSlug]);
+  }, [session, user?.name, user?.role, roomId, roomSlug, roomTheme]);
 
   useEffect(() => {
     if (session?.roomSlug || session?.roomId) {
@@ -209,6 +221,7 @@ const App = () => {
     setParticipants([]);
     setDiceLog([]);
     setConnectionError('');
+    setRoomTheme('default');
     navigate('/');
   }, [navigate]);
 
@@ -243,6 +256,8 @@ const App = () => {
       diceChannelRef.current?.postMessage({ type: 'DiceRoll', payload });
     } else if (message?.type === 'DiceLogEntry' && message.payload) {
       setDiceLog((prev) => [message.payload, ...prev.filter((entry) => entry.id !== message.payload.id)].slice(0, 50));
+    } else if (message?.type === 'ThemeChange' && message.payload?.theme) {
+      setRoomTheme(message.payload.theme);
     }
   }, []);
 
@@ -279,6 +294,35 @@ const App = () => {
         .catch(() => {});
     }
   }, [diceRoll, roomId, user?.name]);
+
+  const handleThemeChange = useCallback((newTheme) => {
+    if (!roomId) return;
+    // Optimistically update
+    setRoomTheme(newTheme);
+    // Send to server
+    fetch(`/rooms/${roomId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: newTheme }),
+    }).catch((err) => {
+      console.error('Failed to update theme:', err);
+    });
+  }, [roomId]);
+
+  // Fetch initial room theme when room changes
+  useEffect(() => {
+    if (!roomId) return;
+    fetch(`/rooms/${roomId}`, {
+      headers: { 'Accept': 'application/json' },
+    })
+      .then((res) => res.json())
+      .then((room) => {
+        if (room?.theme) {
+          setRoomTheme(room.theme);
+        }
+      })
+      .catch(() => {});
+  }, [roomId]);
 
   const sortedImages = useMemo(
     () => {
@@ -384,6 +428,8 @@ const App = () => {
                 onSendDiceRoll={sendDiceRoll}
                 diceLog={diceLog}
                 onDiceResult={handleDiceResult}
+                theme={roomTheme}
+                onThemeChange={handleThemeChange}
               />
             </RoomLoader>
           )}
