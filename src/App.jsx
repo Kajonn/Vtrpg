@@ -61,6 +61,7 @@ const loadPersistedSession = () => {
         user: parsed.user,
         playerId: parsed.playerId,
         playerToken: parsed.playerToken,
+        theme: parsed.theme || 'default',
       };
     }
   } catch (err) {
@@ -167,7 +168,7 @@ const App = () => {
   const [connectionError, setConnectionError] = useState('');
   const [diceRoll, setDiceRoll] = useState(null);
   const [diceLog, setDiceLog] = useState([]);
-  const [roomTheme, setRoomTheme] = useState('default');
+  const [roomTheme, setRoomTheme] = useState(() => initialSession?.theme || 'default');
   const diceChannelRef = useRef(null);
 
   const navigate = useNavigate();
@@ -191,9 +192,10 @@ const App = () => {
     const payload = {
       ...session,
       roomSlug: roomSlug || roomId,
+      theme: roomTheme,  
     };
     localStorage.setItem('vtrpg.session', JSON.stringify(payload));
-  }, [session, user?.name, user?.role, roomId, roomSlug]);
+  }, [session, user?.name, user?.role, roomId, roomSlug, roomTheme]);
 
   useEffect(() => {
     if (session?.roomSlug || session?.roomId) {

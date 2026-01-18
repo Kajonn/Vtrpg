@@ -10,6 +10,7 @@
 - Room lookup by slug: `GET /rooms/slug/{slug}` (404 if unknown).
 - Players join via `POST /rooms/join` with `{ "slug": "<slug>", "name": "<display name>" }`; names must be 2–32 characters limited to letters, numbers, spaces, hyphens, underscores, or apostrophes.
 - Images: `GET/POST/PATCH/DELETE /rooms/{roomId}/images`; uploads expect multipart `file`, URL shares use `{ "url": "..." }`.
+- Room theme: stored in the `rooms` table (`theme TEXT NOT NULL DEFAULT 'default'`). Update via `PATCH /rooms/{roomId}` with `{ "theme": "<theme>" }`. Valid themes are defined in `internal/server/models.go` (`ValidThemes`). Theme changes are broadcast to all connected WebSocket clients via `ThemeChange` message.
 - WebSockets use the custom implementation in `internal/server/websocket.go`; do not swap libraries or change framing without coordination.
 - Logging uses `slog` JSON to stdout; avoid altering format.
 
