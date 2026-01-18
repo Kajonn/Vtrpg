@@ -23,6 +23,7 @@
 - Run `npm run test:e2e` (Playwright) for substantial feature or flow updates; may be skipped for documentation-only or comment-only edits.
 - Note any skipped checks in the final summary.
 - When running Playwright locally, install browsers first with `npx playwright install --with-deps` (proxy restrictions may require the fallback download URLs Playwright uses automatically).
+- Only use English language
 
 ## Style and safety
 - Prefer stdlib on the backend; keep handlers simple and align with existing patterns.
