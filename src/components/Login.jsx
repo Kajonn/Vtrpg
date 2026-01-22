@@ -177,6 +177,11 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
           </div>
         )}
       </form>
+
+      <div className="card__section gm-login-section">
+        <p className="muted">Are you a Game Master?</p>
+        <a href="/gm" className="gm-login-link">Log in with your GM account →</a>
+      </div>
     </div>
   );
 };

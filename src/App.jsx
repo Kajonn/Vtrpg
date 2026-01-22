@@ -4,6 +4,7 @@ import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import JoinBySlug from './components/JoinBySlug.jsx';
 import AdminRooms from './components/AdminRooms.jsx';
+import GMDashboard from './components/GMDashboard.jsx';
 import './App.css';
 
 const RoomLoader = ({ children, onRoomNotFound }) => {
@@ -395,6 +396,25 @@ const App = () => {
     setDiceLog([]);
   }, [roomSelection]);
 
+  const handleGMJoin = useCallback((room) => {
+    const nextSession = {
+      roomId: room.id,
+      roomSlug: room.slug,
+      user: {
+        name: 'GM',
+        role: 'gm',
+        id: 'gm-auth0',
+      },
+    };
+    setSession(nextSession);
+    setRoomSelection(room.slug);
+    setSharedImages([]);
+    setParticipants([]);
+    setDiceLog([]);
+    setConnectionError('');
+    navigate(`/rooms/${room.slug}`);
+  }, [navigate]);
+
   return (
     <div className="app-shell">
       {connectionError && session?.user && <p className="error">{connectionError}</p>}
@@ -408,6 +428,10 @@ const App = () => {
               <Login onLogin={handleLegacyLogin} defaultRoom={roomSelection} onRoomChange={setRoomSelection} />
             )
           }
+        />
+        <Route
+          path="/gm"
+          element={<GMDashboard onJoinAsGM={handleGMJoin} />}
         />
         <Route
           path="/room/:slug"

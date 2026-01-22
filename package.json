@@ -11,6 +11,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@auth0/auth0-react": "^2.11.0",
     "@dimforge/rapier3d-compat": "^0.19.3",
     "prop-types": "^15.8.1",
     "react": "^18.3.1",

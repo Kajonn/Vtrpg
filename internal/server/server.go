@@ -41,6 +41,7 @@ type Server struct {
 	wsRooms         map[string]map[*wsConn]clientProfile
 	gmRooms         map[string]*wsConn
 	wsMu            sync.Mutex
+	auth0           *auth0Middleware
 }
 
 // New constructs a Server with routes and middleware configured.
@@ -65,6 +66,15 @@ func New(cfg Config) (*Server, error) {
 		wsRooms:        make(map[string]map[*wsConn]clientProfile),
 		gmRooms:        make(map[string]*wsConn),
 	}
+
+	// Initialize Auth0 middleware if configured
+	if cfg.Auth0Domain != "" && cfg.Auth0Audience != "" {
+		srv.auth0 = newAuth0Middleware(Auth0Config{
+			Domain:   cfg.Auth0Domain,
+			Audience: cfg.Auth0Audience,
+		}, logger)
+	}
+
 	for _, origin := range cfg.AllowedOrigins {
 		if origin == "*" {
 			srv.allowAllOrigins = true
@@ -95,6 +105,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/ws/", s.handleWebsocket) // allow room-scoped websocket paths
 	s.mux.HandleFunc("/admin/rooms", s.handleAdminRooms)
 	s.mux.HandleFunc("/admin/rooms/", s.handleAdminRoom)
+	s.mux.HandleFunc("/gm/rooms", s.handleGMRooms)
+	s.mux.HandleFunc("/gm/rooms/", s.handleGMRoom)
 	s.mux.HandleFunc("/rooms/join", s.handleRoomJoin)
 	s.mux.HandleFunc("/rooms", s.handleRooms)
 	s.mux.HandleFunc("/rooms/slug/", s.handleRoomLookup)
@@ -318,6 +330,170 @@ func (s *Server) handleAdminRoom(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// requireGMAuth validates Auth0 token and returns GM claims. Returns nil if auth fails.
+func (s *Server) requireGMAuth(w http.ResponseWriter, r *http.Request) *GMClaims {
+	if s.auth0 == nil {
+		http.Error(w, "Auth0 not configured", http.StatusServiceUnavailable)
+		return nil
+	}
+
+	header := r.Header.Get("Authorization")
+	if header == "" || !strings.HasPrefix(header, "Bearer ") {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return nil
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+	claims, err := s.auth0.validateToken(r.Context(), token)
+	if err != nil {
+		s.logger.Warn("invalid token", slog.String("error", err.Error()))
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return nil
+	}
+
+	// Check for GM role (via custom claim or permissions)
+	hasGMRole := claims.Role == "gm"
+	if !hasGMRole {
+		for _, perm := range claims.Permissions {
+			if perm == "gm" || perm == "gm:access" {
+				hasGMRole = true
+				break
+			}
+		}
+	}
+
+	if !hasGMRole {
+		http.Error(w, "forbidden: gm role required", http.StatusForbidden)
+		return nil
+	}
+
+	return claims
+}
+
+// handleGMRooms handles GET and POST for /gm/rooms
+func (s *Server) handleGMRooms(w http.ResponseWriter, r *http.Request) {
+	claims := s.requireGMAuth(w, r)
+	if claims == nil {
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		rooms, err := s.listRoomsByCreatorSub(claims.Subject)
+		if err != nil {
+			s.logger.Error("list gm rooms", slog.String("error", err.Error()), slog.String("sub", claims.Subject))
+			http.Error(w, "failed to list rooms", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, rooms)
+
+	case http.MethodPost:
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(payload.Name)
+		if name == "" {
+			name = "Untitled room"
+		}
+		if utf8.RuneCountInString(name) > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "room name must be 100 characters or less"})
+			return
+		}
+
+		// Use the Auth0 name claim as createdBy, fallback to email or subject
+		createdBy := claims.Name
+		if createdBy == "" {
+			createdBy = claims.Email
+		}
+		if createdBy == "" {
+			createdBy = claims.Subject
+		}
+
+		room, err := s.createRoomWithSub(name, createdBy, claims.Subject)
+		if err != nil {
+			s.logger.Error("create gm room", slog.String("error", err.Error()), slog.String("sub", claims.Subject))
+			http.Error(w, "failed to create room", http.StatusInternalServerError)
+			return
+		}
+
+		s.logger.Info("gm room created", slog.String("roomId", room.ID), slog.String("sub", claims.Subject))
+		writeJSON(w, http.StatusCreated, room)
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// handleGMRoom handles operations on a specific GM room
+func (s *Server) handleGMRoom(w http.ResponseWriter, r *http.Request) {
+	claims := s.requireGMAuth(w, r)
+	if claims == nil {
+		return
+	}
+
+	identifier := strings.Trim(strings.TrimPrefix(r.URL.Path, "/gm/rooms"), "/")
+	if identifier == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	roomID, ok, err := s.resolveRoomID(identifier)
+	if err != nil {
+		s.logger.Error("resolve room for gm", slog.String("error", err.Error()))
+		http.Error(w, "failed to resolve room", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Verify the GM owns this room
+	room, err := s.getRoomByID(roomID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Error("get room for gm", slog.String("error", err.Error()))
+		http.Error(w, "failed to get room", http.StatusInternalServerError)
+		return
+	}
+
+	if room.CreatedBySub != claims.Subject {
+		http.Error(w, "forbidden: you do not own this room", http.StatusForbidden)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, room)
+
+	case http.MethodDelete:
+		deleted, err := s.deleteRoom(roomID)
+		if err != nil {
+			s.logger.Error("delete gm room", slog.String("roomId", roomID), slog.String("error", err.Error()))
+			http.Error(w, "failed to delete room", http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Info("gm room deleted", slog.String("roomId", roomID), slog.String("sub", claims.Subject))
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1124,8 +1300,52 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 	return Room{}, errors.New("failed to generate unique room slug")
 }
 
-func (s *Server) listRooms() ([]Room, error) {
-	rows, err := s.db.Query(`SELECT id, slug, name, theme, created_by, created_at FROM rooms ORDER BY created_at DESC, id DESC`)
+// createRoomWithSub creates a room with Auth0 subject tracking for GM ownership.
+func (s *Server) createRoomWithSub(name, createdBy, createdBySub string) (Room, error) {
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return Room{}, errMissingCreator
+	}
+
+	var room Room
+	for attempt := 0; attempt < 5; attempt++ {
+		slug, err := s.newSlug()
+		if err != nil {
+			return Room{}, err
+		}
+		room = Room{
+			ID:           s.newID(),
+			Slug:         slug,
+			Name:         name,
+			Theme:        ThemeDefault,
+			CreatedBy:    createdBy,
+			CreatedBySub: createdBySub,
+			CreatedAt:    time.Now().UTC(),
+		}
+		result, err := s.db.Exec(
+			`INSERT OR IGNORE INTO rooms (id, slug, name, theme, created_by, created_by_sub, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			room.ID, room.Slug, room.Name, room.Theme, room.CreatedBy, room.CreatedBySub, room.CreatedAt,
+		)
+		if err != nil {
+			return Room{}, err
+		}
+		if rows, _ := result.RowsAffected(); rows > 0 {
+			if err := s.ensureRoomActivity(room.ID, room.CreatedAt); err != nil {
+				return Room{}, err
+			}
+			return room, nil
+		}
+	}
+
+	return Room{}, errors.New("failed to generate unique room slug")
+}
+
+// listRoomsByCreatorSub returns rooms created by the given Auth0 subject.
+func (s *Server) listRoomsByCreatorSub(sub string) ([]Room, error) {
+	rows, err := s.db.Query(
+		`SELECT id, slug, name, theme, created_by, created_by_sub, created_at FROM rooms WHERE created_by_sub = ? ORDER BY created_at DESC, id DESC`,
+		sub,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1134,9 +1354,35 @@ func (s *Server) listRooms() ([]Room, error) {
 	rooms := make([]Room, 0)
 	for rows.Next() {
 		var room Room
-		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt); err != nil {
+		var createdBySub sql.NullString
+		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &createdBySub, &room.CreatedAt); err != nil {
 			return nil, err
 		}
+		room.CreatedBySub = createdBySub.String
+		room.CreatedAt = room.CreatedAt.UTC()
+		rooms = append(rooms, room)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return rooms, nil
+}
+
+func (s *Server) listRooms() ([]Room, error) {
+	rows, err := s.db.Query(`SELECT id, slug, name, theme, created_by, created_by_sub, created_at FROM rooms ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rooms := make([]Room, 0)
+	for rows.Next() {
+		var room Room
+		var createdBySub sql.NullString
+		if err := rows.Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &createdBySub, &room.CreatedAt); err != nil {
+			return nil, err
+		}
+		room.CreatedBySub = createdBySub.String
 		room.CreatedAt = room.CreatedAt.UTC()
 		rooms = append(rooms, room)
 	}
@@ -1355,25 +1601,29 @@ func (s *Server) listAdminRooms() ([]AdminRoomSummary, error) {
 
 func (s *Server) getRoomBySlug(slug string) (Room, bool, error) {
 	var room Room
-	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_at FROM rooms WHERE slug = ?`, slug).
-		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt)
+	var createdBySub sql.NullString
+	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_by_sub, created_at FROM rooms WHERE slug = ?`, slug).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &createdBySub, &room.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Room{}, false, nil
 	}
 	if err != nil {
 		return Room{}, false, err
 	}
+	room.CreatedBySub = createdBySub.String
 	room.CreatedAt = room.CreatedAt.UTC()
 	return room, true, nil
 }
 
 func (s *Server) getRoomByID(roomID string) (Room, error) {
 	var room Room
-	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_at FROM rooms WHERE id = ?`, roomID).
-		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &room.CreatedAt)
+	var createdBySub sql.NullString
+	err := s.db.QueryRow(`SELECT id, slug, name, theme, created_by, created_by_sub, created_at FROM rooms WHERE id = ?`, roomID).
+		Scan(&room.ID, &room.Slug, &room.Name, &room.Theme, &room.CreatedBy, &createdBySub, &room.CreatedAt)
 	if err != nil {
 		return Room{}, err
 	}
+	room.CreatedBySub = createdBySub.String
 	room.CreatedAt = room.CreatedAt.UTC()
 	return room, nil
 }
