@@ -261,7 +261,7 @@ func (m *auth0Middleware) refreshJWKS(ctx context.Context) error {
 	}
 
 	if len(newKeys) == 0 {
-		return fmt.Errorf("jwks contained no valid keys")
+		return fmt.Errorf("failed to parse JWKS: no valid RSA signing keys found in response")
 	}
 
 	m.jwks.keys = newKeys

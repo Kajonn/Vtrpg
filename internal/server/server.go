@@ -420,15 +420,11 @@ func (s *Server) handleGMRooms(w http.ResponseWriter, r *http.Request) {
 			createdBy = claims.Subject
 		}
 
-		// Validate and sanitize createdBy: limit length and ensure it's not empty
-		createdBy = strings.TrimSpace(createdBy)
-		if createdBy == "" {
+		// Validate and sanitize createdBy
+		createdBy, err := validateAndSanitizeCreatedBy(createdBy)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unable to determine user identity"})
 			return
-		}
-		if utf8.RuneCountInString(createdBy) > 100 {
-			// Truncate to 100 characters to prevent excessively long values
-			createdBy = string([]rune(createdBy)[:100])
 		}
 
 		room, err := s.createRoomWithSub(name, createdBy, claims.Subject)
@@ -484,7 +480,7 @@ func (s *Server) handleGMRoom(w http.ResponseWriter, r *http.Request) {
 
 	// Handle rooms without CreatedBySub (pre-Auth0 migration rooms)
 	if room.CreatedBySub == "" {
-		http.Error(w, "forbidden: this room was created before Auth0 integration and cannot be managed via this endpoint", http.StatusForbidden)
+		http.Error(w, "This room cannot be managed through the GM dashboard. Please contact support for assistance.", http.StatusForbidden)
 		return
 	}
 
@@ -1319,10 +1315,12 @@ func (s *Server) createRoom(name, createdBy string) (Room, error) {
 
 // createRoomWithSub creates a room with Auth0 subject tracking for GM ownership.
 func (s *Server) createRoomWithSub(name, createdBy, createdBySub string) (Room, error) {
-	createdBy = strings.TrimSpace(createdBy)
-	if createdBy == "" {
+	// Validate createdBy using shared validation logic
+	validatedCreatedBy, err := validateAndSanitizeCreatedBy(createdBy)
+	if err != nil {
 		return Room{}, errMissingCreator
 	}
+	createdBy = validatedCreatedBy
 
 	var room Room
 	for attempt := 0; attempt < 5; attempt++ {
@@ -1827,6 +1825,21 @@ func (s *Server) countPlayers(roomID string) (int, error) {
 	err := s.db.QueryRow(`SELECT COUNT(1) FROM players WHERE room_id = ?`, roomID).Scan(&count)
 	return count, err
 }
+
+// validateAndSanitizeCreatedBy validates and sanitizes a createdBy value for room creation.
+// It trims whitespace, checks for empty values, and truncates if too long.
+func validateAndSanitizeCreatedBy(createdBy string) (string, error) {
+	createdBy = strings.TrimSpace(createdBy)
+	if createdBy == "" {
+		return "", fmt.Errorf("createdBy cannot be empty")
+	}
+	if utf8.RuneCountInString(createdBy) > 100 {
+		// Truncate to 100 characters to prevent excessively long values
+		createdBy = string([]rune(createdBy)[:100])
+	}
+	return createdBy, nil
+}
+
 
 var (
 	errMissingCreator = errors.New("createdBy is required")
