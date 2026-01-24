@@ -431,7 +431,23 @@ const App = () => {
         />
         <Route
           path="/gm"
-          element={<GMDashboard onJoinAsGM={handleGMJoin} />}
+          element={
+            import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID ? (
+              <GMDashboard onJoinAsGM={handleGMJoin} />
+            ) : (
+              <div className="card gm-dashboard">
+                <div className="card__section">
+                  <h2>GM Login</h2>
+                  <p className="error">
+                    Auth0 authentication is not configured. Please contact the administrator.
+                  </p>
+                  <p className="gm-note">
+                    <Link to="/">← Back to player login</Link>
+                  </p>
+                </div>
+              </div>
+            )
+          }
         />
         <Route
           path="/room/:slug"
