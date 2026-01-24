@@ -1127,3 +1127,68 @@ test.describe('admin rooms', () => {
     await expect(page.getByText('Spooky Lair')).toBeHidden({ timeout: 5000 });
   });
 });
+
+test.describe('GM login flow', () => {
+  test('renders GMDashboard route at /gm', async ({ page }) => {
+    await page.goto('/gm');
+
+    // When Auth0 is not configured, should show appropriate message
+    await expect(page.getByRole('heading', { name: /GM Login/i })).toBeVisible();
+    // In test environment without Auth0, we expect the "not configured" message
+    await expect(page.getByText(/Auth0 authentication is not configured/i)).toBeVisible();
+  });
+
+  test('shows appropriate message when Auth0 not configured', async ({ page }) => {
+    await page.goto('/gm');
+
+    // Should show the Auth0 not configured message
+    await expect(page.getByText(/Auth0 authentication is not configured/i)).toBeVisible();
+    await expect(page.getByText(/Please contact the administrator/i)).toBeVisible();
+  });
+
+  test('has link to GM login from player login page', async ({ page }) => {
+    await page.goto('/');
+
+    // Should show link to GM login
+    const gmLink = page.getByRole('link', { name: /Log in with your GM account/i });
+    await expect(gmLink).toBeVisible();
+    
+    // Link should point to /gm
+    await expect(gmLink).toHaveAttribute('href', '/gm');
+  });
+
+  test('navigating to GM login from player page uses client-side routing', async ({ page }) => {
+    await page.goto('/');
+
+    // Click the GM login link
+    const gmLink = page.getByRole('link', { name: /Log in with your GM account/i });
+    await gmLink.click();
+
+    // Should navigate to /gm without full page reload
+    await expect(page).toHaveURL('/gm');
+    await expect(page.getByRole('heading', { name: /GM Login/i })).toBeVisible();
+  });
+
+  test('has back to player login link on GM login page', async ({ page }) => {
+    await page.goto('/gm');
+
+    // Should show link back to player login
+    const backLink = page.getByRole('link', { name: /Back to player login/i });
+    await expect(backLink).toBeVisible();
+    
+    // Link should point to /
+    await expect(backLink).toHaveAttribute('href', '/');
+  });
+
+  test('navigating back to player login uses client-side routing', async ({ page }) => {
+    await page.goto('/gm');
+
+    // Click the back to player login link
+    const backLink = page.getByRole('link', { name: /Back to player login/i });
+    await backLink.click();
+
+    // Should navigate to / without full page reload
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: /Join a room/i })).toBeVisible();
+  });
+});

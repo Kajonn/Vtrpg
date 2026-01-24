@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import PropTypes from 'prop-types';
 
 const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
@@ -180,7 +181,7 @@ const Login = ({ onLogin, defaultRoom, onRoomChange }) => {
 
       <div className="card__section gm-login-section">
         <p className="muted">Are you a Game Master?</p>
-        <a href="/gm" className="gm-login-link">Log in with your GM account →</a>
+        <Link to="/gm" className="gm-login-link">Log in with your GM account →</Link>
       </div>
     </div>
   );

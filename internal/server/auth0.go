@@ -201,6 +201,7 @@ func (m *auth0Middleware) getPublicKey(ctx context.Context, kid string) (*rsa.Pu
 		return nil, err
 	}
 
+	// Check cache again after refresh
 	m.jwks.mu.RLock()
 	key, ok := m.jwks.keys[kid]
 	m.jwks.mu.RUnlock()
@@ -257,6 +258,10 @@ func (m *auth0Middleware) refreshJWKS(ctx context.Context) error {
 		}
 
 		newKeys[key.Kid] = pubKey
+	}
+
+	if len(newKeys) == 0 {
+		return fmt.Errorf("failed to parse JWKS: no valid RSA signing keys found in response")
 	}
 
 	m.jwks.keys = newKeys
