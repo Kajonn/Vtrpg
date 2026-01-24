@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import PropTypes from 'prop-types';
 
 const GMDashboard = ({ onJoinAsGM }) => {
@@ -129,7 +129,7 @@ const GMDashboard = ({ onJoinAsGM }) => {
             Log in as Game Master
           </button>
           <p className="gm-note">
-            <a href="/">← Back to player login</a>
+            <Link to="/">← Back to player login</Link>
           </p>
         </div>
       </div>

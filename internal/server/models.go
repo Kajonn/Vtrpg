@@ -123,7 +123,7 @@ type Room struct {
 	Name         string    `json:"name"`
 	Theme        Theme     `json:"theme"`
 	CreatedBy    string    `json:"createdBy"`
-	CreatedBySub string    `json:"createdBySub,omitempty"` // Auth0 subject
+	CreatedBySub string    `json:"-"` // Auth0 subject (internal only, not exposed via JSON)
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
