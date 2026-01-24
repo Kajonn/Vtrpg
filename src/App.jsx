@@ -396,14 +396,14 @@ const App = () => {
     setDiceLog([]);
   }, [roomSelection]);
 
-  const handleGMJoin = useCallback((room) => {
+  const handleGMJoin = useCallback((room, gmUser) => {
     const nextSession = {
       roomId: room.id,
       roomSlug: room.slug,
       user: {
-        name: 'GM',
+        name: gmUser?.name || gmUser?.email || 'GM',
         role: 'gm',
-        id: 'gm-auth0',
+        id: gmUser?.sub || 'gm-auth0',
       },
     };
     setSession(nextSession);

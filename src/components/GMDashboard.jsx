@@ -40,11 +40,20 @@ const GMDashboard = ({ onJoinAsGM }) => {
       setRooms(data || []);
     } catch (err) {
       console.error('Failed to fetch rooms:', err);
-      setRoomsError(err.message || 'Failed to load rooms');
+      // Handle Auth0-specific errors
+      if (err.error === 'login_required') {
+        setRoomsError('Your session has expired. Please log in again.');
+        setTimeout(() => loginWithRedirect(), 2000);
+      } else if (err.error === 'consent_required') {
+        setRoomsError('Additional consent is required. Please log in again.');
+        setTimeout(() => loginWithRedirect(), 2000);
+      } else {
+        setRoomsError(err.message || 'Failed to load rooms');
+      }
     } finally {
       setLoadingRooms(false);
     }
-  }, [isAuthenticated, getAccessTokenSilently]);
+  }, [isAuthenticated, getAccessTokenSilently, loginWithRedirect]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -79,13 +88,22 @@ const GMDashboard = ({ onJoinAsGM }) => {
 
       // Navigate to the room as GM
       if (onJoinAsGM) {
-        onJoinAsGM(room);
+        onJoinAsGM(room, user);
       } else {
         navigate(`/rooms/${room.slug}`);
       }
     } catch (err) {
       console.error('Failed to create room:', err);
-      setCreateError(err.message || 'Failed to create room');
+      // Handle Auth0-specific errors
+      if (err.error === 'login_required') {
+        setCreateError('Your session has expired. Please log in again.');
+        setTimeout(() => loginWithRedirect(), 2000);
+      } else if (err.error === 'consent_required') {
+        setCreateError('Additional consent is required. Please log in again.');
+        setTimeout(() => loginWithRedirect(), 2000);
+      } else {
+        setCreateError(err.message || 'Failed to create room');
+      }
     } finally {
       setCreating(false);
     }
@@ -93,7 +111,7 @@ const GMDashboard = ({ onJoinAsGM }) => {
 
   const handleEnterRoom = (room) => {
     if (onJoinAsGM) {
-      onJoinAsGM(room);
+      onJoinAsGM(room, user);
     } else {
       navigate(`/rooms/${room.slug}`);
     }

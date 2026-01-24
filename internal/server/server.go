@@ -420,6 +420,17 @@ func (s *Server) handleGMRooms(w http.ResponseWriter, r *http.Request) {
 			createdBy = claims.Subject
 		}
 
+		// Validate and sanitize createdBy: limit length and ensure it's not empty
+		createdBy = strings.TrimSpace(createdBy)
+		if createdBy == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unable to determine user identity"})
+			return
+		}
+		if utf8.RuneCountInString(createdBy) > 100 {
+			// Truncate to 100 characters to prevent excessively long values
+			createdBy = string([]rune(createdBy)[:100])
+		}
+
 		room, err := s.createRoomWithSub(name, createdBy, claims.Subject)
 		if err != nil {
 			s.logger.Error("create gm room", slog.String("error", err.Error()), slog.String("sub", claims.Subject))
@@ -468,6 +479,12 @@ func (s *Server) handleGMRoom(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logger.Error("get room for gm", slog.String("error", err.Error()))
 		http.Error(w, "failed to get room", http.StatusInternalServerError)
+		return
+	}
+
+	// Handle rooms without CreatedBySub (pre-Auth0 migration rooms)
+	if room.CreatedBySub == "" {
+		http.Error(w, "forbidden: this room was created before Auth0 integration and cannot be managed via this endpoint", http.StatusForbidden)
 		return
 	}
 
