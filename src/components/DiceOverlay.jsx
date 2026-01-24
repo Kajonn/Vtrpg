@@ -46,12 +46,70 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
 
   const roomKey = useMemo(() => roomId || 'default', [roomId]);
   const channelName = useMemo(() => `vtrpg-dice-${roomKey}`, [roomKey]);
+  const debugConfig = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return {
+        enabled: false,
+        forcedSeed: null,
+        velocityMultiplier: 1,
+        minClearTimeout: 20000,
+        stepsPerFrame: 1,
+      };
+    }
+    const params = new URLSearchParams(window.location.search);
+    const enabled = ['1', 'true', 'yes'].includes((params.get('diceDebug') || '').toLowerCase());
+
+    const parsedSeed = Number(params.get('diceSeed'));
+    const forcedSeed = Number.isFinite(parsedSeed) ? parsedSeed : null;
+
+    const parsedVelocity = Number(params.get('diceVelocity'));
+    const velocityMultiplier = Number.isFinite(parsedVelocity) && parsedVelocity > 0 ? parsedVelocity : 1;
+
+    const parsedClearMin = Number(params.get('diceClearMin'));
+    const minClearTimeout = Number.isFinite(parsedClearMin) && parsedClearMin >= 1000 ? parsedClearMin : 20000;
+
+    const parsedStepsPerFrame = Number(params.get('diceStepsPerFrame'));
+    const stepsPerFrame = enabled
+      ? (Number.isFinite(parsedStepsPerFrame) && parsedStepsPerFrame >= 1 ? Math.floor(parsedStepsPerFrame) : 6)
+      : 1;
+
+    return {
+      enabled,
+      forcedSeed,
+      velocityMultiplier,
+      minClearTimeout,
+      stepsPerFrame,
+    };
+  }, []);
 
   useEffect(() => {
     if (status !== 'settled' || !onDiceResult) return;
 
     const world = worldRef.current;
     if (!world) return;
+
+    const renderer = rendererRef.current?.renderer;
+    const camera = rendererRef.current?.camera;
+    const upVector = new THREE.Vector3(0, 0, 1);
+    const debugEntries = [];
+
+    if (debugConfig.enabled && camera) {
+      camera.updateMatrixWorld();
+      camera.updateProjectionMatrix();
+    }
+
+    const projectToScreen = (translation) => {
+      if (!debugConfig.enabled || !renderer || !camera) return null;
+      const width = renderer.domElement.clientWidth;
+      const height = renderer.domElement.clientHeight;
+      if (!width || !height) return null;
+      const vector = new THREE.Vector3(translation.x, translation.y, translation.z);
+      vector.project(camera);
+      return {
+        x: (vector.x * 0.5 + 0.5) * width,
+        y: (-vector.y * 0.5 + 0.5) * height,
+      };
+    };
 
     const results = diceRef.current.map((die) => {
       const body = world.getRigidBody(die.bodyHandle);
@@ -63,29 +121,53 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
       // Find the face normal that is most aligned with the Z-axis (up)
       let maxDot = -Infinity;
       let topValue = 0;
+      let bestNormal = null;
       const faceNormals = DICE_FACE_NORMALS[die.sides] || [];
 
       faceNormals.forEach(({ value, normal }) => {
         const worldNormal = normal.clone().applyQuaternion(quaternion);
-        const dot = worldNormal.dot(new THREE.Vector3(0, 0, 1));
+        const dot = worldNormal.dot(upVector);
         if (dot > maxDot) {
           maxDot = dot;
           topValue = value;
+          bestNormal = normal;
         }
       });
+
+      if (debugConfig.enabled) {
+        const translation = body.translation();
+        const screen = projectToScreen(translation);
+        const debugEntry = {
+          sides: die.sides,
+          topValue,
+          maxDot,
+          bestNormal: bestNormal
+            ? { x: bestNormal.x, y: bestNormal.y, z: bestNormal.z }
+            : null,
+          translation: { x: translation.x, y: translation.y, z: translation.z },
+          screen,
+        };
+        debugEntries.push(debugEntry);
+        console.info('dice-debug top face', debugEntry);
+      }
       return topValue;
     });
+
+    if (debugConfig.enabled && typeof window !== 'undefined') {
+      window.__diceDebugLastResults = debugEntries;
+    }
 
     if (results.length > 0) {
       onDiceResult(results);
     }
-  }, [status, onDiceResult]);
+  }, [status, onDiceResult, debugConfig]);
 
   // Clear dice after configured timeout once they settle
   useEffect(() => {
     if (status !== 'settled') return;
 
-    const timeout = diceSettings?.clearTimeout ?? 5000;
+    const baseTimeout = diceSettings?.clearTimeout ?? 5000;
+    const timeout = debugConfig.enabled ? Math.max(baseTimeout, debugConfig.minClearTimeout) : baseTimeout;
     clearTimeoutRef.current = setTimeout(() => {
       teardown();
       setStatus('idle');
@@ -98,7 +180,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
         clearTimeoutRef.current = null;
       }
     };
-  }, [status]);
+  }, [status, diceSettings?.clearTimeout, debugConfig.enabled, debugConfig.minClearTimeout]);
 
   const teardown = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -178,6 +260,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
     worldRef.current = world;
     buildBounds(world, RAPIER);
     const velMult = diceSettings?.velocityMultiplier ?? { x: 1, y: 1, z: 1 };
+    const debugVelocityMultiplier = debugConfig.enabled ? debugConfig.velocityMultiplier : 1;
     const dice = Array.from({ length: count }, () => {
       const { mesh, geometry, vertices } = prepareDieMesh(modelEntry);
       const rotation = randomRotation(rng);
@@ -190,9 +273,9 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
           y: randomInRange(rng, -ARENA_HEIGHT / 2 + DIE_SIZE, ARENA_HEIGHT / 2 - DIE_SIZE),
         },
         velocity: {
-          x: randomInRange(rng, -600, 900) * velMult.x,
-          y: randomInRange(rng, 320, 620) * velMult.y,
-          z: randomInRange(rng, 0, 0) * velMult.z,
+          x: randomInRange(rng, -600, 900) * velMult.x * debugVelocityMultiplier,
+          y: randomInRange(rng, 320, 620) * velMult.y * debugVelocityMultiplier,
+          z: randomInRange(rng, 0, 0) * velMult.z * debugVelocityMultiplier,
         },
         angularVelocity: {
           x: randomInRange(rng, -10, 10),
@@ -226,7 +309,7 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
 
     diceRef.current = preparedDice;
     stepRef.current = 0;
-  }, [diceModels, diceSettings]);
+  }, [diceModels, diceSettings, debugConfig]);
 
   const renderFrame = () => {
     const { renderer, camera } = rendererRef.current || {};
@@ -252,12 +335,17 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
     if (!world) return;
     const deltaTime = 1 / 60; // Target 60 FPS
     const maxSubSteps = 4;
-    world.step(null, deltaTime, maxSubSteps);
+    const stepsPerFrame = debugConfig.enabled ? debugConfig.stepsPerFrame : 1;
+    for (let i = 0; i < stepsPerFrame; i += 1) {
+      world.step(null, deltaTime, maxSubSteps);
+      stepRef.current += 1;
+    }
     renderFrame();
-    stepRef.current += 1;
-    const elapsed = rollStartedAtRef.current
-      ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) - rollStartedAtRef.current
-      : 0;
+    const elapsed = debugConfig.enabled
+      ? stepRef.current * (1000 / 60)
+      : rollStartedAtRef.current
+        ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) - rollStartedAtRef.current
+        : 0;
     const exceededDuration = elapsed > MAX_ROLL_DURATION;
     const pastMinimumDuration = elapsed >= MIN_ROLL_DURATION;
 
@@ -438,12 +526,21 @@ const DiceOverlay = ({ roomId, diceRoll, onSendDiceRoll, onDiceResult, userName,
 
   const rollDice = () => {
     const hasCrypto = typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function';
-    const seed = hasCrypto
+    const overrideSeed = debugConfig.enabled && typeof window !== 'undefined'
+      ? Number(window.__diceDebugSeedOverride)
+      : NaN;
+    const forcedSeed = debugConfig.enabled
+      ? (Number.isFinite(overrideSeed) ? overrideSeed : debugConfig.forcedSeed)
+      : null;
+    const seed = forcedSeed ?? (hasCrypto
       ? crypto.getRandomValues(new Uint32Array(1))[0]
-      : Math.floor(Math.random() * 1_000_000_000) || Date.now();
+      : Math.floor(Math.random() * 1_000_000_000) || Date.now());
     const triggeredBy = userName || 'Okänd';
     setRollerName(triggeredBy);
     setStatus('rolling');
+    if (debugConfig.enabled && typeof window !== 'undefined') {
+      window.__diceDebugLastSeed = seed;
+    }
     broadcastRoll(seed, diceCount, diceSides, triggeredBy);
     startSimulation(seed, diceCount, diceSides);
   };

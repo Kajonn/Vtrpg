@@ -19,12 +19,12 @@ export const DICE_FACE_NORMALS = {
     { value: 4, normal: new THREE.Vector3(-0.577, 0.577, -0.577) },
   ],
   6: [
-    { value: 1, normal: new THREE.Vector3(0, 0, 1) },
-    { value: 6, normal: new THREE.Vector3(0, 0, -1) },
-    { value: 2, normal: new THREE.Vector3(0, 1, 0) },
-    { value: 5, normal: new THREE.Vector3(0, -1, 0) },
-    { value: 3, normal: new THREE.Vector3(1, 0, 0) },
-    { value: 4, normal: new THREE.Vector3(-1, 0, 0) },
+    { value: 3, normal: new THREE.Vector3(0, 0, 1) },
+    { value: 4, normal: new THREE.Vector3(0, 0, -1) },
+    { value: 1, normal: new THREE.Vector3(0, 1, 0) },
+    { value: 6, normal: new THREE.Vector3(0, -1, 0) },
+    { value: 5, normal: new THREE.Vector3(1, 0, 0) },
+    { value: 2, normal: new THREE.Vector3(-1, 0, 0) },
   ],
   8: [
     { value: 1, normal: new THREE.Vector3(0.577, 0.577, 0.577) },
@@ -150,8 +150,8 @@ export const extractVertices = (geometry) => {
   return unique;
 };
 
-export const createColliderForSides = (RAPIER, sides, vertices) => {
-  const dieSize = DIE_SCALES[sides];
+export const createColliderForSides = (RAPIER, sides, vertices, scaleMultiplier = 1) => {
+  const dieSize = DIE_SCALES[sides] * scaleMultiplier;
   
   if (sides === 6) {
     return RAPIER.ColliderDesc.cuboid(dieSize / 2, dieSize / 2, dieSize / 2)
@@ -159,7 +159,17 @@ export const createColliderForSides = (RAPIER, sides, vertices) => {
       .setFriction(0.32);
   }
 
-  const convex = RAPIER.ColliderDesc.convexHull(new Float32Array(vertices));
+  let scaledVertices;
+  if (scaleMultiplier === 1) {
+    scaledVertices = new Float32Array(vertices);
+  } else {
+    scaledVertices = new Float32Array(vertices.length);
+    for (let i = 0; i < vertices.length; i += 1) {
+      scaledVertices[i] = vertices[i] * scaleMultiplier;
+    }
+  }
+
+  const convex = RAPIER.ColliderDesc.convexHull(scaledVertices);
   if (convex) {
     convex.setRestitution(0.55).setFriction(0.32);
     return convex;
