@@ -110,6 +110,18 @@ func initSchema(db *sql.DB) error {
 		}
 	}
 
+	// Migration: add created_by_sub column for Auth0 subject tracking
+	if _, err := db.Exec(`ALTER TABLE rooms ADD COLUMN created_by_sub TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			// Column might already exist, which is fine
+		}
+	}
+
+	// Create index for faster GM room lookups
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_rooms_created_by_sub ON rooms(created_by_sub)`); err != nil {
+		return fmt.Errorf("create created_by_sub index: %w", err)
+	}
+
 	return nil
 }
 

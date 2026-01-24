@@ -1814,3 +1814,167 @@
   font-size: 0.9rem;
   flex-shrink: 0;
 }
+
+/* GM Dashboard Styles */
+.gm-dashboard {
+  max-width: 600px;
+  margin: 2rem auto;
+}
+
+.gm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.gm-user-info {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.gm-logout-button {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.gm-logout-button:hover {
+  border-color: var(--error-color);
+  color: var(--error-color);
+}
+
+.gm-description {
+  color: var(--text-muted);
+  margin-bottom: 1rem;
+}
+
+.gm-login-button {
+  padding: 1rem 2rem;
+  background: var(--accent-gradient);
+  border: none;
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
+.gm-login-button:hover {
+  opacity: 0.9;
+}
+
+.gm-note {
+  margin-top: 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.gm-note a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.gm-note a:hover {
+  text-decoration: underline;
+}
+
+.gm-create-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.gm-no-rooms {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.gm-room-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.gm-room-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.gm-room-item:hover {
+  border-color: var(--border-color-hover);
+}
+
+.gm-room-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.gm-room-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.gm-room-slug {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.gm-enter-button {
+  padding: 0.5rem 1rem;
+  background: var(--accent-gradient);
+  border: none;
+  color: var(--bg-primary);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.gm-enter-button:hover {
+  opacity: 0.9;
+}
+
+.gm-refresh-button {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.gm-refresh-button:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.gm-login-section {
+  text-align: center;
+  border-top: 1px solid var(--border-color);
+  padding-top: 1rem;
+}
+
+.gm-login-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.gm-login-link:hover {
+  text-decoration: underline;
+}

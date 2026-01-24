@@ -4,6 +4,7 @@ import Login from './components/Login.jsx';
 import Room from './components/Room.jsx';
 import JoinBySlug from './components/JoinBySlug.jsx';
 import AdminRooms from './components/AdminRooms.jsx';
+import GMDashboard from './components/GMDashboard.jsx';
 import './App.css';
 
 const RoomLoader = ({ children, onRoomNotFound }) => {
@@ -395,6 +396,25 @@ const App = () => {
     setDiceLog([]);
   }, [roomSelection]);
 
+  const handleGMJoin = useCallback((room, gmUser) => {
+    const nextSession = {
+      roomId: room.id,
+      roomSlug: room.slug,
+      user: {
+        name: gmUser?.name || gmUser?.email || 'GM',
+        role: 'gm',
+        id: gmUser?.sub || 'gm-auth0',
+      },
+    };
+    setSession(nextSession);
+    setRoomSelection(room.slug);
+    setSharedImages([]);
+    setParticipants([]);
+    setDiceLog([]);
+    setConnectionError('');
+    navigate(`/rooms/${room.slug}`);
+  }, [navigate]);
+
   return (
     <div className="app-shell">
       {connectionError && session?.user && <p className="error">{connectionError}</p>}
@@ -406,6 +426,26 @@ const App = () => {
               <Navigate to={`/rooms/${roomSlug || roomId}`} replace />
             ) : (
               <Login onLogin={handleLegacyLogin} defaultRoom={roomSelection} onRoomChange={setRoomSelection} />
+            )
+          }
+        />
+        <Route
+          path="/gm"
+          element={
+            import.meta.env.VITE_AUTH0_DOMAIN && import.meta.env.VITE_AUTH0_CLIENT_ID ? (
+              <GMDashboard onJoinAsGM={handleGMJoin} />
+            ) : (
+              <div className="card gm-dashboard">
+                <div className="card__section">
+                  <h2>GM Login</h2>
+                  <p className="error">
+                    Auth0 authentication is not configured. Please contact the administrator.
+                  </p>
+                  <p className="gm-note">
+                    <Link to="/">← Back to player login</Link>
+                  </p>
+                </div>
+              </div>
             )
           }
         />

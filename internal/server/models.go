@@ -118,12 +118,13 @@ func IsValidTheme(t Theme) bool {
 
 // Room represents a shared space.
 type Room struct {
-	ID        string    `json:"id"`
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	Theme     Theme     `json:"theme"`
-	CreatedBy string    `json:"createdBy"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID           string    `json:"id"`
+	Slug         string    `json:"slug"`
+	Name         string    `json:"name"`
+	Theme        Theme     `json:"theme"`
+	CreatedBy    string    `json:"createdBy"`
+	CreatedBySub string    `json:"-"` // Auth0 subject (internal only, not exposed via JSON)
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 type RoomActivity struct {

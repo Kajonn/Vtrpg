@@ -16,6 +16,9 @@ type Config struct {
 	UploadDir         string
 	DBPath            string
 	AdminToken        string
+	// Auth0 configuration
+	Auth0Domain   string
+	Auth0Audience string
 }
 
 const (
@@ -39,6 +42,8 @@ func LoadConfig() Config {
 		UploadDir:         getEnv("UPLOAD_DIR", defaultUploadDir),
 		DBPath:            getEnv("DB_PATH", defaultDBPath),
 		AdminToken:        getEnv("ADMIN_TOKEN", "admin"),
+		Auth0Domain:       os.Getenv("AUTH0_DOMAIN"),
+		Auth0Audience:     os.Getenv("AUTH0_AUDIENCE"),
 	}
 
 	if rawMax := os.Getenv("MAX_UPLOAD_SIZE"); rawMax != "" {
